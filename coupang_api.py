@@ -30,14 +30,20 @@ def get_full_product_title(product_url: str, fallback_name: str) -> str:
         }
         resp = requests.get(product_url, headers=headers, timeout=5)
         if not resp.ok:
+            print(f"[전체제목 조회 실패] status={resp.status_code} url={product_url} -> API 이름으로 대체: {fallback_name}")
             return fallback_name
         match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
         if not match:
+            print(f"[전체제목 조회 실패] title 태그 없음 url={product_url} -> API 이름으로 대체: {fallback_name}")
             return fallback_name
         title = match.group(1).strip()
         # "상품명, 500ml, 40개 - 국산생수 | 쿠팡" 형태에서 " | 쿠팡" 꼬리표만 제거
         title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
-        return title if title else fallback_name
+        if not title:
+            print(f"[전체제목 조회 실패] title 비어있음 url={product_url} -> API 이름으로 대체: {fallback_name}")
+            return fallback_name
+        print(f"[전체제목 조회 성공] {title}")
+        return title
     except requests.RequestException:
         return fallback_name
 
