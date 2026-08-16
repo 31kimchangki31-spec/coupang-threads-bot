@@ -50,6 +50,7 @@ def main():
     for candidate in candidates:
         if candidate["productUrl"] in posted:
             continue
+        print(f"시도: {candidate['productName']} / URL: {candidate['productUrl']}")
         try:
             deeplink_result = create_deeplink(
                 [candidate["productUrl"]], coupang_access_key, coupang_secret_key
