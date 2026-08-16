@@ -40,19 +40,10 @@ DISCOUNT_EMOJIS = ["🔻", "⬇️", "🔥"]
 
 def shorten_product_name(name: str) -> str:
     """
-    부가설명(- 뒤에 붙는 카테고리성 문구)만 제거하고, 핵심 상품명과 수량/용량 정보는
-    자르지 않고 전체 그대로 보여준다.
+    상품명을 자르거나 변형하지 않고 전체 그대로 반환한다.
+    쉼표(,), 하이픈(-), 수량, 용량, 괄호 등 모든 내용을 유지한다.
     """
-    parts = [p.strip() for p in re.split(r"[,\-]", name) if p.strip()]
-    if not parts:
-        return name
-
-    core = parts[0]
-    quantity_parts = [p for p in parts[1:] if QUANTITY_PATTERN.search(p)]
-
-    if quantity_parts:
-        return core + ", " + ", ".join(quantity_parts)
-    return core
+    return name.strip()
 
 
 def _discount_line(discount_rate) -> str:
