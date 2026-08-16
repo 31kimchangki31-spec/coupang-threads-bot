@@ -29,6 +29,8 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
         params["media_type"] = "TEXT"
 
     resp = requests.post(create_url, params=params)
+    if not resp.ok:
+        print(f"[Threads 컨테이너 생성 실패] status={resp.status_code} body={resp.text}")
     resp.raise_for_status()
     creation_id = resp.json()["id"]
 
@@ -41,6 +43,8 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
         publish_url,
         params={"creation_id": creation_id, "access_token": access_token},
     )
+    if not publish_resp.ok:
+        print(f"[Threads 발행 실패] status={publish_resp.status_code} body={publish_resp.text}")
     publish_resp.raise_for_status()
     return publish_resp.json()["id"]
 
