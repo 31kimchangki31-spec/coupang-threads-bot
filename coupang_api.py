@@ -121,3 +121,35 @@ def get_best_category_products(
         raise RuntimeError(f"베스트 카테고리 조회 실패: {result.get('rMessage')}")
 
     return result["data"]
+
+
+# 자주 쓰는 생활/인기 카테고리 (필요하면 자유롭게 추가/삭제하세요)
+DEFAULT_CATEGORY_IDS = [
+    "1024",  # 생활용품
+    "1012",  # 주방용품
+    "1010",  # 뷰티
+    "1013",  # 식품
+]
+
+
+def get_best_products_pool(
+    access_key: str, secret_key: str, category_ids=None, limit_per_category: int = 20
+) -> list:
+    """
+    여러 카테고리의 베스트 상품을 한번에 모아서 보조 상품 풀로 사용.
+    골드박스 물량이 소진됐을 때 이걸로 채운다.
+    """
+    if category_ids is None:
+        category_ids = DEFAULT_CATEGORY_IDS
+
+    pool = []
+    for cid in category_ids:
+        try:
+            items = get_best_category_products(
+                cid, access_key, secret_key, limit=limit_per_category
+            )
+            pool.extend(items)
+        except RuntimeError as e:
+            print(f"카테고리 {cid} 베스트 조회 실패, 건너뜀: {e}")
+            continue
+    return pool
