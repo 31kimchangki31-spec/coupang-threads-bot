@@ -1,0 +1,27 @@
+name: Threads 토큰 자동 갱신
+
+# 60일 만료를 피하기 위해 넉넉하게 30일마다 갱신
+on:
+  schedule:
+    - cron: "0 3 1 * *"   # 매월 1일 새벽 3시(UTC)
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 토큰 갱신 요청
+        id: refresh
+        run: |
+          RESPONSE=$(curl -s -G "https://graph.threads.net/v1.0/refresh_access_token" \
+            --data-urlencode "grant_type=th_refresh_token" \
+            --data-urlencode "access_token=${{ secrets.THREADS_ACCESS_TOKEN }}")
+          echo "response=$RESPONSE" >> "$GITHUB_OUTPUT"
+          NEW_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          echo "new_token=$NEW_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Secret 업데이트
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set THREADS_ACCESS_TOKEN --body "${{ steps.refresh.outputs.new_token }}" --repo ${{ github.repository }}
