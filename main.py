@@ -56,6 +56,28 @@ def load_posted():
     return set()
 
 
+def attractiveness_score(candidate: dict) -> float:
+    """
+    클릭 잘 받을 만한 상품을 우선 노출하기 위한 점수.
+    할인율이 높을수록, 로켓배송이면 가점.
+    (쿠팡 API 응답에 discountRate가 없는 카테고리도 있어서 없으면 0으로 처리)
+    """
+    score = 0.0
+    discount_rate = candidate.get("discountRate")
+    if discount_rate:
+        try:
+            score += float(discount_rate)
+        except (TypeError, ValueError):
+            pass
+    if candidate.get("isRocket"):
+        score += 5  # 로켓배송 가점
+    return score
+
+
+def sort_by_attractiveness(candidates: list) -> list:
+    return sorted(candidates, key=attractiveness_score, reverse=True)
+
+
 def save_posted(posted_urls):
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(list(posted_urls), f, ensure_ascii=False, indent=2)
@@ -69,9 +91,9 @@ def main():
 
     posted = load_posted()
 
-    # 1. 골드박스 특가 상품 조회 (최대치로)
-    candidates = get_goldbox_products(
-        coupang_access_key, coupang_secret_key, limit=100
+    # 1. 골드박스 특가 상품 조회 (최대치로), 할인율/로켓배송 기준 정렬
+    candidates = sort_by_attractiveness(
+        get_goldbox_products(coupang_access_key, coupang_secret_key, limit=100)
     )
 
     # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도.
@@ -107,8 +129,10 @@ def main():
 
         # 골드박스 소진 -> 베스트 카테고리 풀로 확장
         print("골드박스 물량 소진. 베스트 카테고리 상품으로 보충합니다.")
-        candidates = get_best_products_pool(
-            coupang_access_key, coupang_secret_key, limit_per_category=20
+        candidates = sort_by_attractiveness(
+            get_best_products_pool(
+                coupang_access_key, coupang_secret_key, limit_per_category=20
+            )
         )
         source_label = "베스트카테고리"
         tried_fallback = True
