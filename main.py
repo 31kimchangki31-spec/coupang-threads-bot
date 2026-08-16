@@ -13,7 +13,7 @@ import sys
 import json
 from urllib.parse import urlparse, parse_qs
 
-from coupang_api import get_goldbox_products, get_best_products_pool, create_deeplink
+from coupang_api import get_goldbox_products, get_best_products_pool, create_deeplink, get_full_product_title
 from caption_generator import generate_caption
 from threads_api import post_to_threads
 
@@ -141,7 +141,7 @@ def main():
         print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
-    product_name = target["productName"]
+    product_name = get_full_product_title(target["productUrl"], target["productName"])
     price = target.get("productPrice", 0)
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
     print(f"딥링크: {deeplink}")
