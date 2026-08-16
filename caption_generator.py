@@ -16,7 +16,7 @@ def generate_caption(product_name: str, price: int, deeplink: str) -> str:
     if use_ai:
         return _generate_with_ai(product_name, price, deeplink)
 
-    price_str = f"{price:,}원" if price else ""
+    price_str = f"{int(price):,}원" if price else ""
     body = f"{product_name}\n{price_str}\n\n{deeplink}"
     return body + DISCLOSURE
 
@@ -25,7 +25,7 @@ def _generate_with_ai(product_name: str, price: int, deeplink: str) -> str:
     """Claude API로 캡션 생성 (ANTHROPIC_API_KEY 설정 시에만 사용)"""
     import anthropic
 
-    price_str = f"{price:,}원" if price else ""
+    price_str = f"{int(price):,}원" if price else ""
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
