@@ -6,18 +6,44 @@ ANTHROPIC_API_KEY가 설정되어 있으면 Claude API로 자연스러운 문구
 """
 import os
 import random
+import re
 
 # 스크린샷 스타일: 상품명 -> 가격 -> (빈줄) -> 링크 순서
 DISCLOSURE = "\n\n(이 게시물은 쿠팡파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.)"
 
+MAX_CORE_NAME_LEN = 20  # 핵심 상품명(수량 제외) 최대 길이
+QUANTITY_PATTERN = re.compile(r"\d[\d,.]*\s*(g|kg|ml|l|개|매|팩|box|봉|입|정|포|캡슐|장|병|세트)", re.IGNORECASE)
+
+
+def shorten_product_name(name: str) -> str:
+    """
+    상품명이 길면 핵심 이름만 줄이고, '500ml' '40개' 같은 수량/용량 정보는 항상 살려서 붙인다.
+    쿠팡 상품명은 보통 '핵심이름, 옵션1, 옵션2 - 부가설명' 형태라 쉼표/하이픈으로 분리해 처리.
+    """
+    parts = [p.strip() for p in re.split(r"[,\-]", name) if p.strip()]
+    if not parts:
+        return name
+
+    core = parts[0]
+    quantity_parts = [p for p in parts[1:] if QUANTITY_PATTERN.search(p)]
+
+    if len(core) > MAX_CORE_NAME_LEN:
+        core = core[:MAX_CORE_NAME_LEN].rstrip() + "…"
+
+    if quantity_parts:
+        return core + ", " + ", ".join(quantity_parts)
+    return core
+
 
 def generate_caption(product_name: str, price: int, deeplink: str) -> str:
+    short_name = shorten_product_name(product_name)
+
     use_ai = bool(os.environ.get("ANTHROPIC_API_KEY"))
     if use_ai:
-        return _generate_with_ai(product_name, price, deeplink)
+        return _generate_with_ai(short_name, price, deeplink)
 
     price_str = f"💰 {int(price):,}원" if price else ""
-    body = f"{product_name}\n{price_str}\n\n🔗 {deeplink}"
+    body = f"{short_name}\n{price_str}\n\n🔗 {deeplink}"
     return body + DISCLOSURE
 
 
