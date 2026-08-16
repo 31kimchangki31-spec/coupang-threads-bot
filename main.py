@@ -11,6 +11,7 @@
 import os
 import sys
 import json
+import random
 from urllib.parse import urlparse, parse_qs
 
 from coupang_api import get_goldbox_products, get_best_products_pool, create_deeplink, get_full_product_title
@@ -18,6 +19,12 @@ from caption_generator import generate_caption
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
+
+# 하루 23시간(오전 7시~다음날 오전 6시) 동안 30분 간격으로 워크플로가 46번 실행됨.
+# 그중 평균 30번만 실제로 게시되도록 확률을 걸어서 간격을 불규칙하게 만든다.
+DAILY_ACTIVE_SLOTS = 46   # 23시간 / 30분
+DAILY_TARGET_POSTS = 30
+POST_PROBABILITY = DAILY_TARGET_POSTS / DAILY_ACTIVE_SLOTS
 
 
 def normalize_product_url(raw_url: str) -> str:
@@ -84,6 +91,12 @@ def save_posted(posted_urls):
 
 
 def main():
+    # 불규칙 게시: 이번 실행에서 실제로 올릴지 말지 확률로 결정.
+    # 평균적으로 하루 30개 정도만 올라가고, 간격은 매번 달라짐.
+    if random.random() > POST_PROBABILITY:
+        print(f"이번 회차는 스킵 (확률 {POST_PROBABILITY:.0%}) - 불규칙 게시를 위한 정상 동작입니다.")
+        sys.exit(0)
+
     coupang_access_key = os.environ["COUPANG_ACCESS_KEY"]
     coupang_secret_key = os.environ["COUPANG_SECRET_KEY"]
     threads_user_id = os.environ["THREADS_USER_ID"]
