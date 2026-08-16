@@ -99,17 +99,18 @@ def main():
 
     product_name = target["productName"]
     price = target.get("productPrice", 0)
-    image_url = target.get("productImage")
-    print(f"선택된 상품: {product_name} ({price:,}원)")
+    print(f"선택된 상품: {product_name} ({int(price):,}원)")
     print(f"딥링크: {deeplink}")
 
     # 4. 캡션 생성
     caption = generate_caption(product_name, price, deeplink)
     print(f"게시 문구:\n{caption}")
 
-    # 5. 쓰레드 게시 (상품 이미지 포함)
+    # 5. 쓰레드 게시
+    # 이미지를 직접 첨부하지 않고 TEXT로 게시 -> 쓰레드가 링크를 스캔해서
+    # 사진+상품명+가격이 담긴 미리보기 카드를 자동으로 붙여줌 ("광고" 라벨도 이때 같이 붙음)
     media_id = post_to_threads(
-        threads_user_id, threads_access_token, caption, image_url=image_url
+        threads_user_id, threads_access_token, caption
     )
     print(f"게시 완료. media_id={media_id}")
 
