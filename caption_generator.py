@@ -14,11 +14,25 @@ DISCLOSURE = "\n\n(이 게시물은 쿠팡파트너스 활동의 일환으로, �
 MAX_CORE_NAME_LEN = 20  # 핵심 상품명(수량 제외) 최대 길이
 QUANTITY_PATTERN = re.compile(r"\d[\d,.]*\s*(g|kg|ml|l|개|매|팩|box|봉|입|정|포|캡슐|장|병|세트)", re.IGNORECASE)
 
+# 매번 무작위로 하나씩 골라 쓰는 도입 문구 (봇 느낌 줄이기용)
+HOOK_TEMPLATES = [
+    "오늘의 특가 떴어요 👀",
+    "이거 재구매각인데 지금 싸네요",
+    "장바구니 담아두고 나중에 후회하지 마세요",
+    "혼자 알기 아까운 가격이라 공유해요",
+    "요즘 이거 잘 쓰고 있어요",
+    "지금 이 가격이면 사야 함",
+    "눈여겨보던 상품인데 할인 중이네요",
+]
+
+MONEY_EMOJIS = ["💰", "💸", "🏷️"]
+LINK_EMOJIS = ["🔗", "👉", "📎"]
+
 
 def shorten_product_name(name: str) -> str:
     """
-    상품명이 길면 핵심 이름만 줄이고, '500ml' '40개' 같은 수량/용량 정보는 항상 살려서 붙인다.
-    쿠팡 상품명은 보통 '핵심이름, 옵션1, 옵션2 - 부가설명' 형태라 쉼표/하이픈으로 분리해 처리.
+    부가설명(- 뒤에 붙는 카테고리성 문구)만 제거하고, 핵심 상품명과 수량/용량 정보는
+    자르지 않고 전체 그대로 보여준다.
     """
     parts = [p.strip() for p in re.split(r"[,\-]", name) if p.strip()]
     if not parts:
@@ -26,9 +40,6 @@ def shorten_product_name(name: str) -> str:
 
     core = parts[0]
     quantity_parts = [p for p in parts[1:] if QUANTITY_PATTERN.search(p)]
-
-    if len(core) > MAX_CORE_NAME_LEN:
-        core = core[:MAX_CORE_NAME_LEN].rstrip() + "…"
 
     if quantity_parts:
         return core + ", " + ", ".join(quantity_parts)
@@ -42,8 +53,12 @@ def generate_caption(product_name: str, price: int, deeplink: str) -> str:
     if use_ai:
         return _generate_with_ai(short_name, price, deeplink)
 
-    price_str = f"💰 {int(price):,}원" if price else ""
-    body = f"{short_name}\n{price_str}\n\n🔗 {deeplink}"
+    hook = random.choice(HOOK_TEMPLATES)
+    money_emoji = random.choice(MONEY_EMOJIS)
+    link_emoji = random.choice(LINK_EMOJIS)
+
+    price_str = f"{money_emoji} {int(price):,}원" if price else ""
+    body = f"{hook}\n\n{short_name}\n{price_str}\n\n{link_emoji} {deeplink}"
     return body + DISCLOSURE
 
 
