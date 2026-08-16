@@ -11,12 +11,42 @@
 import os
 import sys
 import json
+from urllib.parse import urlparse, parse_qs
 
 from coupang_api import get_goldbox_products, create_deeplink
 from caption_generator import generate_caption
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
+
+
+def normalize_product_url(raw_url: str) -> str:
+    """
+    골드박스 API가 주는 URL은 이미 다른 제휴 태그(lptag)가 찍힌
+    link.coupang.com 링크라 딥링크 재변환이 거부된다.
+    쿼리스트링의 itemId/vendorItemId/pageKey를 뽑아 순수 상품 URL로 재조립한다.
+    """
+    parsed = urlparse(raw_url)
+    params = parse_qs(parsed.query)
+
+    item_id = params.get("itemId", [None])[0]
+    vendor_item_id = params.get("vendorItemId", [None])[0]
+    product_id = params.get("pageKey", [None])[0] or item_id
+
+    if not product_id:
+        # 뽑을 정보가 없으면 원본 URL 그대로 시도 (마지막 수단)
+        return raw_url
+
+    clean_url = f"https://www.coupang.com/vp/products/{product_id}"
+    query_parts = []
+    if item_id:
+        query_parts.append(f"itemId={item_id}")
+    if vendor_item_id:
+        query_parts.append(f"vendorItemId={vendor_item_id}")
+    if query_parts:
+        clean_url += "?" + "&".join(query_parts)
+
+    return clean_url
 
 
 def load_posted():
@@ -50,10 +80,11 @@ def main():
     for candidate in candidates:
         if candidate["productUrl"] in posted:
             continue
-        print(f"시도: {candidate['productName']} / URL: {candidate['productUrl']}")
+        clean_url = normalize_product_url(candidate["productUrl"])
+        print(f"시도: {candidate['productName']} / 원본: {candidate['productUrl']} / 정리된 URL: {clean_url}")
         try:
             deeplink_result = create_deeplink(
-                [candidate["productUrl"]], coupang_access_key, coupang_secret_key
+                [clean_url], coupang_access_key, coupang_secret_key
             )
             deeplink = deeplink_result[0]["shortenUrl"]
             target = candidate
