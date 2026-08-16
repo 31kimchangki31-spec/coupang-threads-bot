@@ -36,7 +36,7 @@ LINK_EMOJIS = ["🔗", "👉", "📎"]
 DISCOUNT_EMOJIS = ["🔻", "⬇️", "🔥"]
 
 
-f shorten_product_name(name: str) -> str:
+def shorten_product_name(name: str) -> str:
     """
     부가설명(- 뒤에 붙는 카테고리성 문구)만 제거하고, 핵심 상품명과 수량/용량 정보는
     자르지 않고 전체 그대로 보여준다.
