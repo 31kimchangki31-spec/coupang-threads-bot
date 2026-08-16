@@ -3,7 +3,7 @@ name: Coupang -> Threads 자동 게시
 on:
   schedule:
     # 매일 UTC 00:00 = 한국시간(KST) 오전 9시
-    - cron: "0 0 * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
 
 permissions:
