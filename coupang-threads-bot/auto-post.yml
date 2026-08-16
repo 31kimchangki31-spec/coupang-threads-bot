@@ -1,0 +1,42 @@
+name: Coupang -> Threads 자동 게시
+
+on:
+  schedule:
+    # 매일 UTC 00:00 = 한국시간(KST) 오전 9시
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
+
+permissions:
+  contents: write   # posted.json 커밋을 위해 필요
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 자동 게시 실행
+        env:
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # AI 캡션 쓰려면 주석 해제
+        run: python main.py
+
+      - name: 게시 기록(posted.json) 커밋
+        run: |
+          git config user.name "auto-post-bot"
+          git config user.email "actions@github.com"
+          git add posted.json
+          git diff --cached --quiet || git commit -m "chore: 게시 기록 업데이트"
+          git push
