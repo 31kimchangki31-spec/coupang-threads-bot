@@ -13,7 +13,7 @@ import sys
 import json
 from urllib.parse import urlparse, parse_qs
 
-from coupang_api import get_goldbox_products, create_deeplink
+from coupang_api import get_goldbox_products, get_best_products_pool, create_deeplink
 from caption_generator import generate_caption
 from threads_api import post_to_threads
 
@@ -69,29 +69,49 @@ def main():
 
     posted = load_posted()
 
-    # 1. 골드박스 특가 상품 조회
+    # 1. 골드박스 특가 상품 조회 (최대치로)
     candidates = get_goldbox_products(
-        coupang_access_key, coupang_secret_key, limit=20
+        coupang_access_key, coupang_secret_key, limit=100
     )
 
-    # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도
+    # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도.
+    # 골드박스에서 다 소진되면(전부 게시했거나 변환 실패) 베스트 카테고리 풀을 추가로 불러와서 이어서 시도.
     target = None
     deeplink = None
-    for candidate in candidates:
-        if candidate["productUrl"] in posted:
-            continue
-        clean_url = normalize_product_url(candidate["productUrl"])
-        print(f"시도: {candidate['productName']} / 원본: {candidate['productUrl']} / 정리된 URL: {clean_url}")
-        try:
-            deeplink_result = create_deeplink(
-                [clean_url], coupang_access_key, coupang_secret_key
-            )
-            deeplink = deeplink_result[0]["shortenUrl"]
-            target = candidate
+    source_label = "골드박스"
+    tried_fallback = False
+
+    while True:
+        for candidate in candidates:
+            if candidate["productUrl"] in posted:
+                continue
+            clean_url = normalize_product_url(candidate["productUrl"])
+            print(f"[{source_label}] 시도: {candidate['productName']} / 정리된 URL: {clean_url}")
+            try:
+                deeplink_result = create_deeplink(
+                    [clean_url], coupang_access_key, coupang_secret_key
+                )
+                deeplink = deeplink_result[0]["shortenUrl"]
+                target = candidate
+                break
+            except RuntimeError as e:
+                print(f"딥링크 변환 실패, 다음 상품으로 넘어감: {candidate['productName']} ({e})")
+                continue
+
+        if target is not None:
             break
-        except RuntimeError as e:
-            print(f"딥링크 변환 실패, 다음 상품으로 넘어감: {candidate['productName']} ({e})")
-            continue
+
+        if tried_fallback:
+            # 베스트 카테고리까지 다 시도했는데도 없으면 포기
+            break
+
+        # 골드박스 소진 -> 베스트 카테고리 풀로 확장
+        print("골드박스 물량 소진. 베스트 카테고리 상품으로 보충합니다.")
+        candidates = get_best_products_pool(
+            coupang_access_key, coupang_secret_key, limit_per_category=20
+        )
+        source_label = "베스트카테고리"
+        tried_fallback = True
 
     if target is None:
         print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
