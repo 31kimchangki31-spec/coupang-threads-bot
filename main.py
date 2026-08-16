@@ -44,24 +44,31 @@ def main():
         coupang_access_key, coupang_secret_key, limit=20
     )
 
-    # 2. 아직 안 올린 상품 선택
-    target = next(
-        (p for p in candidates if p["productUrl"] not in posted), None
-    )
+    # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도
+    target = None
+    deeplink = None
+    for candidate in candidates:
+        if candidate["productUrl"] in posted:
+            continue
+        try:
+            deeplink_result = create_deeplink(
+                [candidate["productUrl"]], coupang_access_key, coupang_secret_key
+            )
+            deeplink = deeplink_result[0]["shortenUrl"]
+            target = candidate
+            break
+        except RuntimeError as e:
+            print(f"딥링크 변환 실패, 다음 상품으로 넘어감: {candidate['productName']} ({e})")
+            continue
+
     if target is None:
-        print("오늘 골드박스 상품을 모두 게시했습니다. 나중에 다시 시도해주세요.")
+        print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
     product_name = target["productName"]
     price = target.get("productPrice", 0)
     image_url = target.get("productImage")
     print(f"선택된 상품: {product_name} ({price:,}원)")
-
-    # 3. 딥링크 생성
-    deeplink_result = create_deeplink(
-        [target["productUrl"]], coupang_access_key, coupang_secret_key
-    )
-    deeplink = deeplink_result[0]["shortenUrl"]
     print(f"딥링크: {deeplink}")
 
     # 4. 캡션 생성
