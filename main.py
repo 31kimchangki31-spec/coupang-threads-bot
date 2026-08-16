@@ -147,7 +147,9 @@ def main():
     print(f"딥링크: {deeplink}")
 
     # 4. 캡션 생성
-    caption = generate_caption(product_name, price, deeplink)
+    caption = generate_caption(
+        product_name, price, deeplink, discount_rate=target.get("discountRate")
+    )
     print(f"게시 문구:\n{caption}")
 
     # 5. 쓰레드 게시
