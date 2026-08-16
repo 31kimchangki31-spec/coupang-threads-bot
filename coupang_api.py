@@ -9,9 +9,37 @@ import time
 import hmac
 import hashlib
 import json
+import re
 import requests
 
 DOMAIN = "https://api-gateway.coupang.com"
+
+
+def get_full_product_title(product_url: str, fallback_name: str) -> str:
+    """
+    API의 productName은 짧게 잘려있는 경우가 많아서(수량/용량 누락),
+    실제 상품 페이지의 <title> 태그(쓰레드 링크카드가 쓰는 것과 동일한 정보)를 가져와
+    본문에도 수량/용량까지 표시되게 한다. 실패하면 API의 짧은 이름으로 대체.
+    """
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        }
+        resp = requests.get(product_url, headers=headers, timeout=5)
+        if not resp.ok:
+            return fallback_name
+        match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
+        if not match:
+            return fallback_name
+        title = match.group(1).strip()
+        # "상품명, 500ml, 40개 - 국산생수 | 쿠팡" 형태에서 " | 쿠팡" 꼬리표만 제거
+        title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
+        return title if title else fallback_name
+    except requests.RequestException:
+        return fallback_name
 
 
 def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> str:
