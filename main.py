@@ -183,6 +183,7 @@ def main():
     # 골드박스에서 다 소진되면(전부 게시했거나 변환 실패) 베스트 카테고리 풀을 추가로 불러와서 이어서 시도.
     target = None
     deeplink = None
+    target_clean_url = None
     source_label = "골드박스"
     tried_fallback = False
 
@@ -198,6 +199,7 @@ def main():
                 )
                 deeplink = deeplink_result[0]["shortenUrl"]
                 target = candidate
+                target_clean_url = clean_url
                 break
             except RuntimeError as e:
                 print(f"딥링크 변환 실패, 다음 상품으로 넘어감: {candidate['productName']} ({e})")
@@ -226,7 +228,7 @@ def main():
         print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
-    product_name = get_full_product_title(target["productUrl"], target["productName"])
+    product_name = get_full_product_title(target_clean_url, target["productName"])
     price = target.get("productPrice", 0)
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
     print(f"딥링크: {deeplink}")
