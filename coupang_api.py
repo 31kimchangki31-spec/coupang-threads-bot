@@ -21,31 +21,39 @@ def get_full_product_title(product_url: str, fallback_name: str) -> str:
     실제 상품 페이지의 <title> 태그(쓰레드 링크카드가 쓰는 것과 동일한 정보)를 가져와
     본문에도 수량/용량까지 표시되게 한다. 실패하면 API의 짧은 이름으로 대체.
     """
-    try:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            )
-        }
-        resp = requests.get(product_url, headers=headers, timeout=5)
-        if not resp.ok:
-            print(f"[전체제목 조회 실패] status={resp.status_code} url={product_url} -> API 이름으로 대체: {fallback_name}")
-            return fallback_name
-        match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
-        if not match:
-            print(f"[전체제목 조회 실패] title 태그 없음 url={product_url} -> API 이름으로 대체: {fallback_name}")
-            return fallback_name
-        title = match.group(1).strip()
-        # "상품명, 500ml, 40개 - 국산생수 | 쿠팡" 형태에서 " | 쿠팡" 꼬리표만 제거
-        title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
-        if not title:
-            print(f"[전체제목 조회 실패] title 비어있음 url={product_url} -> API 이름으로 대체: {fallback_name}")
-            return fallback_name
-        print(f"[전체제목 조회 성공] {title}")
-        return title
-    except requests.RequestException:
-        return fallback_name
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.coupang.com/",
+        "Connection": "keep-alive",
+    }
+
+    last_status = None
+    for attempt in range(2):  # 403/차단 대비 1회 재시도
+        try:
+            resp = requests.get(product_url, headers=headers, timeout=8)
+            last_status = resp.status_code
+            if resp.ok:
+                match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
+                if match:
+                    title = match.group(1).strip()
+                    title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
+                    if title:
+                        print(f"[전체제목 조회 성공] {title}")
+                        return title
+                print(f"[전체제목 조회 실패] title 태그 없음/비어있음 url={product_url}")
+            else:
+                print(f"[전체제목 조회 실패] status={resp.status_code} (시도 {attempt + 1}/2) url={product_url}")
+        except requests.RequestException as e:
+            print(f"[전체제목 조회 실패] 예외 발생 (시도 {attempt + 1}/2): {e}")
+        time.sleep(1.5)
+
+    print(f"-> API 이름으로 대체: {fallback_name} (마지막 상태코드: {last_status})")
+    return fallback_name
 
 
 def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> str:
