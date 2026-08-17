@@ -150,6 +150,11 @@ def sort_by_attractiveness(candidates: list) -> list:
     return sorted(candidates, key=attractiveness_score, reverse=True)
 
 
+def filter_rocket_only(candidates: list) -> list:
+    """로켓배송 상품만 남기고 나머지는 제외"""
+    return [c for c in candidates if c.get("isRocket")]
+
+
 def save_posted(posted_urls):
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(list(posted_urls), f, ensure_ascii=False, indent=2)
@@ -167,9 +172,11 @@ def main():
 
     posted = load_posted()
 
-    # 1. 골드박스 특가 상품 조회 (최대치로), 할인율/로켓배송 기준 정렬
+    # 1. 골드박스 특가 상품 조회 (최대치로), 로켓배송만 남기고 할인율/로켓배송 기준 정렬
     candidates = sort_by_attractiveness(
-        get_goldbox_products(coupang_access_key, coupang_secret_key, limit=100)
+        filter_rocket_only(
+            get_goldbox_products(coupang_access_key, coupang_secret_key, limit=100)
+        )
     )
 
     # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도.
@@ -203,11 +210,13 @@ def main():
             # 베스트 카테고리까지 다 시도했는데도 없으면 포기
             break
 
-        # 골드박스 소진 -> 베스트 카테고리 풀로 확장
+        # 골드박스 소진 -> 베스트 카테고리 풀로 확장 (역시 로켓배송만)
         print("골드박스 물량 소진. 베스트 카테고리 상품으로 보충합니다.")
         candidates = sort_by_attractiveness(
-            get_best_products_pool(
-                coupang_access_key, coupang_secret_key, limit_per_category=20
+            filter_rocket_only(
+                get_best_products_pool(
+                    coupang_access_key, coupang_secret_key, limit_per_category=20
+                )
             )
         )
         source_label = "베스트카테고리"
