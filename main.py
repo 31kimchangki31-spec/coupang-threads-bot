@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import random
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 
 from coupang_api import get_goldbox_products, get_best_products_pool, create_deeplink, get_full_product_title
@@ -19,12 +20,76 @@ from caption_generator import generate_caption
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
+DAILY_COUNT_FILE = "daily_count.json"
 
-# 하루 23시간(오전 7시~다음날 오전 6시) 동안 30분 간격으로 워크플로가 46번 실행됨.
-# 그중 평균 30번만 실제로 게시되도록 확률을 걸어서 간격을 불규칙하게 만든다.
-DAILY_ACTIVE_SLOTS = 46   # 23시간 / 30분
+KST = timezone(timedelta(hours=9))
+WINDOW_START_HOUR = 7    # 활성 구간 시작: 오전 7시(KST)
+WINDOW_LENGTH_HOURS = 23  # 오전 7시 ~ 다음날 오전 6시
+SLOT_MINUTES = 15         # 워크플로가 대략 이 간격으로 돎 (실제 실행은 GitHub 사정에 따라 들쭉날쭉)
 DAILY_TARGET_POSTS = 30
-POST_PROBABILITY = DAILY_TARGET_POSTS / DAILY_ACTIVE_SLOTS
+
+
+def get_window_info(now_kst: datetime):
+    """지금이 속한 활성 구간(07:00~다음날 06:00)의 날짜 라벨과 끝나는 시각을 계산"""
+    if now_kst.hour < WINDOW_START_HOUR:
+        window_date = (now_kst - timedelta(days=1)).date()
+    else:
+        window_date = now_kst.date()
+    start = datetime(window_date.year, window_date.month, window_date.day, WINDOW_START_HOUR, tzinfo=KST)
+    end = start + timedelta(hours=WINDOW_LENGTH_HOURS)
+    return window_date, start, end
+
+
+def load_daily_count(window_date) -> tuple:
+    data = {}
+    if os.path.exists(DAILY_COUNT_FILE):
+        with open(DAILY_COUNT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    return data.get(str(window_date), 0), data
+
+
+def save_daily_count(window_date, count: int, data: dict):
+    data[str(window_date)] = count
+    # 오래된 날짜 기록은 최근 3일치만 남기고 정리
+    for old_key in sorted(data.keys())[:-3]:
+        data.pop(old_key, None)
+    with open(DAILY_COUNT_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def decide_should_post():
+    """
+    오늘 목표(30개) 대비 지금까지 게시한 개수와, 활성 구간 마감까지 남은 시간을 보고
+    이번 회차에 게시할지 확률적으로 결정한다.
+    실행이 중간에 몇 번 씹혀도(GitHub 스케줄 특성), 마감이 다가올수록 확률이 자동으로
+    올라가서 하루 목표치에 최대한 맞춰진다.
+    """
+    now = datetime.now(KST)
+    window_date, start, end = get_window_info(now)
+
+    if now < start or now > end:
+        print(f"활성 시간대(07:00~다음날 06:00) 밖입니다. 지금: {now.strftime('%H:%M')}")
+        return False, window_date, 0, {}
+
+    already_posted, data = load_daily_count(window_date)
+    remaining_target = DAILY_TARGET_POSTS - already_posted
+
+    if remaining_target <= 0:
+        print(f"오늘({window_date}) 목표({DAILY_TARGET_POSTS}개) 이미 달성. 스킵.")
+        return False, window_date, already_posted, data
+
+    remaining_minutes = max(1, (end - now).total_seconds() / 60)
+    remaining_slots = max(1, remaining_minutes / SLOT_MINUTES)
+    probability = min(1.0, remaining_target / remaining_slots)
+
+    roll = random.random()
+    should_post = roll < probability
+    print(
+        f"[스케줄] {window_date} 기준 {already_posted}/{DAILY_TARGET_POSTS}개 게시됨, "
+        f"마감까지 약 {remaining_minutes:.0f}분 남음, 이번 확률 {probability:.0%} -> "
+        f"{'게시' if should_post else '스킵'}"
+    )
+    return should_post, window_date, already_posted, data
 
 
 def normalize_product_url(raw_url: str) -> str:
@@ -91,10 +156,8 @@ def save_posted(posted_urls):
 
 
 def main():
-    # 불규칙 게시: 이번 실행에서 실제로 올릴지 말지 확률로 결정.
-    # 평균적으로 하루 30개 정도만 올라가고, 간격은 매번 달라짐.
-    if random.random() > POST_PROBABILITY:
-        print(f"이번 회차는 스킵 (확률 {POST_PROBABILITY:.0%}) - 불규칙 게시를 위한 정상 동작입니다.")
+    should_post, window_date, already_posted, daily_data = decide_should_post()
+    if not should_post:
         sys.exit(0)
 
     coupang_access_key = os.environ["COUPANG_ACCESS_KEY"]
@@ -176,6 +239,7 @@ def main():
     # 6. 기록 저장
     posted.add(target["productUrl"])
     save_posted(posted)
+    save_daily_count(window_date, already_posted + 1, daily_data)
 
 
 if __name__ == "__main__":
