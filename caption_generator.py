@@ -8,9 +8,6 @@ import os
 import random
 import re
 
-MAX_CORE_NAME_LEN = 20  # 핵심 상품명(수량 제외) 최대 길이
-QUANTITY_PATTERN = re.compile(r"\d[\d,.]*\s*(g|kg|ml|l|개|매|팩|box|봉|입|정|포|캡슐|장|병|세트)", re.IGNORECASE)
-
 MONEY_EMOJIS = ["💰", "💸", "🏷️"]
 LINK_EMOJIS = ["🔗", "👉", "📎"]
 DISCOUNT_EMOJIS = ["🔻", "⬇️", "🔥"]
@@ -18,19 +15,10 @@ DISCOUNT_EMOJIS = ["🔻", "⬇️", "🔥"]
 
 def shorten_product_name(name: str) -> str:
     """
-    부가설명(- 뒤에 붙는 카테고리성 문구)만 제거하고, 핵심 상품명과 수량/용량 정보는
-    자르지 않고 전체 그대로 보여준다.
+    상품명을 자르지 않고 원본 풀네임 그대로 반환합니다.
+    (쉼표 뒤 30개, 용량 등이 자르기 당하던 현상 수정)
     """
-    parts = [p.strip() for p in re.split(r"[,\-]", name) if p.strip()]
-    if not parts:
-        return name
-
-    core = parts[0]
-    quantity_parts = [p for p in parts[1:] if QUANTITY_PATTERN.search(p)]
-
-    if quantity_parts:
-        return core + ", " + ", ".join(quantity_parts)
-    return core
+    return name.strip()
 
 
 def _discount_line(discount_rate) -> str:
@@ -47,18 +35,31 @@ def _discount_line(discount_rate) -> str:
     return f"{emoji} {rate:.0f}% 할인\n"
 
 
-def generate_caption(product_name: str, price: int, deeplink: str, discount_rate=None) -> str:
-    # 후킹 문구, 대가성 문구 없이 상품 정보만 표기
+def generate_caption(product_name: str, price: int, deeplink: str, discount_rate=None, original_price=None) -> str:
+    # 상품명 원본 풀네임 사용
+    full_name = shorten_product_name(product_name)
+
+    # API discountRate가 없더라도 원가(original_price) 정보가 있다면 직접 할인율 계산
+    calculated_rate = discount_rate
+    if (not calculated_rate or float(calculated_rate) <= 0) and original_price and price:
+        try:
+            orig = float(original_price)
+            curr = float(price)
+            if orig > curr:
+                calculated_rate = round(((orig - curr) / orig) * 100)
+        except (TypeError, ValueError):
+            pass
+
     use_ai = bool(os.environ.get("ANTHROPIC_API_KEY"))
     if use_ai:
-        return _generate_with_ai(product_name, price, deeplink, discount_rate)
+        return _generate_with_ai(full_name, price, deeplink, calculated_rate)
 
     money_emoji = random.choice(MONEY_EMOJIS)
     link_emoji = random.choice(LINK_EMOJIS)
 
-    discount_line = _discount_line(discount_rate)
+    discount_line = _discount_line(calculated_rate)
     price_str = f"{money_emoji} {int(price):,}원" if price else ""
-    return f"{product_name}\n{discount_line}{price_str}\n\n{link_emoji} {deeplink}"
+    return f"{full_name}\n{discount_line}{price_str}\n\n{link_emoji} {deeplink}"
 
 
 def _generate_with_ai(product_name: str, price: int, deeplink: str, discount_rate=None) -> str:
