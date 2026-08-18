@@ -15,44 +15,35 @@ import requests
 
 DOMAIN = "https://api-gateway.coupang.com"
 
-
+from playwright.sync_api import sync_playwright
 def get_full_product_title(product_url: str, fallback_name: str) -> str:
     """
-    쿠팡 웹 페이지를 크롤링하여 풀 상품명을 가져옵니다.
-    차단을 우회하기 위해 HTTP 헤더를 브라우저와 동일하게 강화합니다.
+    Playwright 브라우저를 띄워 쿠팡의 봇 차단을 우회하고 실제 <title>을 가져옵니다.
     """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "max-age=0",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    }
-
     try:
-        resp = requests.get(product_url, headers=headers, timeout=10, allow_redirects=True)
-        if resp.ok:
-            match = re.search(r"<title>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
-            if match:
-                title = match.group(1).strip()
-                title = re.sub(r"\s*[\|-]\s*쿠팡\s*$", "", title, flags=re.IGNORECASE).strip()
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                locale="ko-KR"
+            )
+            page = context.new_page()
+            page.goto(product_url, wait_until="domcontentloaded", timeout=15000)
+            
+            raw_title = page.title()
+            browser.close()
+
+            if raw_title:
+                title = re.sub(r"\s*[\|-]\s*쿠팡\s*$", "", raw_title, flags=re.IGNORECASE).strip()
                 title = html.unescape(title)
                 if title and title != "쿠팡!":
-                    print(f"[전체제목 조회 성공] {title}")
+                    print(f"[Playwright 전체제목 조회 성공] {title}")
                     return title
-            print(f"[전체제목 조회 실패] title 태그 없음/비어있음 (status={resp.status_code})")
-        else:
-            print(f"[전체제목 조회 실패] 쿠팡 차단 발생 (status={resp.status_code})")
-    except requests.RequestException as e:
-        print(f"[전체제목 조회 실패] 예외 발생: {e}")
+    except Exception as e:
+        print(f"[Playwright 전체제목 조회 실패] 예외 발생: {e}")
 
     print(f"-> API 이름으로 대체: {fallback_name}")
     return fallback_name
-
 
 def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> str:
     """쿠팡 Open API 인증 헤더(Authorization) 생성"""
