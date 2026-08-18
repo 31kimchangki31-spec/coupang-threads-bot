@@ -5,7 +5,7 @@
 2. 아직 안 올린 상품 중 하나 선택
 3. 파트너스 딥링크 생성
 4. 상품명+가격+이미지로 게시글 문구 구성
-5. 쓰레드에 이미지 포함 게시
+5. 쓰레드에 이미지 포함 게시 (media_type: IMAGE)
 6. posted.json에 사용 기록 남김 (중복 게시 방지)
 """
 import os
@@ -34,7 +34,6 @@ def normalize_product_url(raw_url: str) -> str:
     product_id = params.get("pageKey", [None])[0] or item_id
 
     if not product_id:
-        # 뽑을 정보가 없으면 원본 URL 그대로 시도 (마지막 수단)
         return raw_url
 
     clean_url = f"https://www.coupang.com/vp/products/{product_id}"
@@ -57,11 +56,6 @@ def load_posted():
 
 
 def attractiveness_score(candidate: dict) -> float:
-    """
-    클릭 잘 받을 만한 상품을 우선 노출하기 위한 점수.
-    할인율이 높을수록, 로켓배송이면 가점.
-    (쿠팡 API 응답에 discountRate가 없는 카테고리도 있어서 없으면 0으로 처리)
-    """
     score = 0.0
     discount_rate = candidate.get("discountRate")
     if discount_rate:
@@ -70,7 +64,7 @@ def attractiveness_score(candidate: dict) -> float:
         except (TypeError, ValueError):
             pass
     if candidate.get("isRocket"):
-        score += 5  # 로켓배송 가점
+        score += 5
     return score
 
 
@@ -79,7 +73,6 @@ def sort_by_attractiveness(candidates: list) -> list:
 
 
 def filter_rocket_only(candidates: list) -> list:
-    """로켓배송 상품만 남기고 나머지는 제외"""
     return [c for c in candidates if c.get("isRocket")]
 
 
@@ -96,15 +89,12 @@ def main():
 
     posted = load_posted()
 
-    # 1. 골드박스 특가 상품 조회 (최대치로), 로켓배송만 남기고 할인율/로켓배송 기준 정렬
     candidates = sort_by_attractiveness(
         filter_rocket_only(
             get_goldbox_products(coupang_access_key, coupang_secret_key, limit=100)
         )
     )
 
-    # 2~3. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품을 찾을 때까지 순서대로 시도.
-    # 골드박스에서 다 소진되면(전부 게시했거나 변환 실패) 베스트 카테고리 풀을 추가로 불러와서 이어서 시도.
     target = None
     deeplink = None
     target_clean_url = None
@@ -133,10 +123,8 @@ def main():
             break
 
         if tried_fallback:
-            # 베스트 카테고리까지 다 시도했는데도 없으면 포기
             break
 
-        # 골드박스 소진 -> 베스트 카테고리 풀로 확장 (역시 로켓배송만)
         print("골드박스 물량 소진. 베스트 카테고리 상품으로 보충합니다.")
         candidates = sort_by_attractiveness(
             filter_rocket_only(
@@ -152,25 +140,33 @@ def main():
         print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
-    # [디버그] API가 실제로 어떤 필드를 주는지 전체 확인 (숨은 수량 필드가 있는지 찾기 위함)
     print(f"[디버그] API 원본 데이터 전체: {json.dumps(target, ensure_ascii=False, indent=2)}")
 
     product_name = get_full_product_title(target_clean_url, target["productName"])
     price = target.get("productPrice", 0)
+    image_url = target.get("productImage")  # 쿠팡 대표 이미지 추출
+
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
+    print(f"이미지 URL: {image_url}")
     print(f"딥링크: {deeplink}")
 
-    # 4. 캡션 생성
+    # 4. 캡션 생성 (원가/할인율 정보 포함)
     caption = generate_caption(
-        product_name, price, deeplink, discount_rate=target.get("discountRate")
+        product_name,
+        price,
+        deeplink,
+        discount_rate=target.get("discountRate"),
+        original_price=target.get("productOriginalPrice")
     )
     print(f"게시 문구:\n{caption}")
 
-    # 5. 쓰레드 게시
-    # 이미지를 직접 첨부하지 않고 TEXT로 게시 -> 쓰레드가 링크를 스캔해서
-    # 사진+상품명+가격이 담긴 미리보기 카드를 자동으로 붙여줌 ("광고" 라벨도 이때 같이 붙음)
+    # 5. 쓰레드 게시 (image_url을 전달하여 이미지 포함 게시글로 등록)
     media_id = post_to_threads(
-        threads_user_id, threads_access_token, caption, topic_tag="광고"
+        user_id=threads_user_id,
+        access_token=threads_access_token,
+        text=caption,
+        image_url=image_url,
+        topic_tag="광고"
     )
     print(f"게시 완료. media_id={media_id}")
 
