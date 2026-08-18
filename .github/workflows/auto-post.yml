@@ -46,3 +46,7 @@ jobs:
           git add posted.json
           git diff --cached --quiet || git commit -m "chore: 게시 기록 업데이트"
           git push
+       - name: 의존성 설치
+        run: |
+       pip install -r requirements.txt
+       playwright install chromium
