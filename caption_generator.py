@@ -30,12 +30,12 @@ HOOK_TEMPLATES = [
     "살까 말까 고민될 가격",
     "이거 지금 가격 괜찮은데? 👀",
 ]
-
+ 
 MONEY_EMOJIS = ["💰", "💸", "🏷️"]
 LINK_EMOJIS = ["🔗", "👉", "📎"]
 DISCOUNT_EMOJIS = ["🔻", "⬇️", "🔥"]
-
-
+ 
+ 
 def shorten_product_name(name: str) -> str:
     """
     부가설명(- 뒤에 붙는 카테고리성 문구)만 제거하고, 핵심 상품명과 수량/용량 정보는
