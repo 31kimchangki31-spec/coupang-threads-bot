@@ -19,7 +19,7 @@ def get_full_product_title(product_url: str, fallback_name: str) -> str:
     """
     API의 productName은 짧게 잘려있는 경우가 많아서(수량/용량 누락),
     실제 상품 페이지의 <title> 태그(쓰레드 링크카드가 쓰는 것과 동일한 정보)를 가져와
-    본문에도 수량/용량까지 표시되게 한다. 실패하면 API의 짧은 이름으로 대체.
+    본문에도 수량/용량까지 표시되게 한다. 실패하면 API의 짧은 이름으로 대체. (1회만 시도)
     """
     headers = {
         "User-Agent": (
@@ -32,27 +32,23 @@ def get_full_product_title(product_url: str, fallback_name: str) -> str:
         "Connection": "keep-alive",
     }
 
-    last_status = None
-    for attempt in range(2):  # 403/차단 대비 1회 재시도
-        try:
-            resp = requests.get(product_url, headers=headers, timeout=8)
-            last_status = resp.status_code
-            if resp.ok:
-                match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
-                if match:
-                    title = match.group(1).strip()
-                    title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
-                    if title:
-                        print(f"[전체제목 조회 성공] {title}")
-                        return title
-                print(f"[전체제목 조회 실패] title 태그 없음/비어있음 url={product_url}")
-            else:
-                print(f"[전체제목 조회 실패] status={resp.status_code} (시도 {attempt + 1}/2) url={product_url}")
-        except requests.RequestException as e:
-            print(f"[전체제목 조회 실패] 예외 발생 (시도 {attempt + 1}/2): {e}")
-        time.sleep(1.5)
+    try:
+        resp = requests.get(product_url, headers=headers, timeout=8)
+        if resp.ok:
+            match = re.search(r"<title>(.*?)</title>", resp.text, re.DOTALL)
+            if match:
+                title = match.group(1).strip()
+                title = re.sub(r"\s*\|\s*쿠팡\s*$", "", title).strip()
+                if title:
+                    print(f"[전체제목 조회 성공] {title}")
+                    return title
+            print(f"[전체제목 조회 실패] title 태그 없음/비어있음 url={product_url}")
+        else:
+            print(f"[전체제목 조회 실패] status={resp.status_code} url={product_url}")
+    except requests.RequestException as e:
+        print(f"[전체제목 조회 실패] 예외 발생: {e}")
 
-    print(f"-> API 이름으로 대체: {fallback_name} (마지막 상태코드: {last_status})")
+    print(f"-> API 이름으로 대체: {fallback_name}")
     return fallback_name
 
 
