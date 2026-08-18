@@ -2,7 +2,7 @@
 """
 쿠팡파트너스 Open API 연동 모듈
 - 상품 URL -> 파트너스 딥링크(단축 URL) 변환
-- HMAC 인증 방식은 쿠팡 공식 가이드를 따름
+- Playwright를 사용한 쿠팡 차단 우회 및 풀 상품명 수집
 """
 import os
 import time
@@ -12,19 +12,25 @@ import json
 import re
 import html
 import requests
+from playwright.sync_api import sync_playwright
 
 DOMAIN = "https://api-gateway.coupang.com"
 
-from playwright.sync_api import sync_playwright
+
 def get_full_product_title(product_url: str, fallback_name: str) -> str:
     """
-    Playwright 브라우저를 띄워 쿠팡의 봇 차단을 우회하고 실제 <title>을 가져옵니다.
+    Playwright headless 브라우저를 사용하여 쿠팡의 봇 차단(403)을 우회하고
+    전체 상품명을 가져옵니다.
     """
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/128.0.0.0 Safari/537.36"
+                ),
                 locale="ko-KR"
             )
             page = context.new_page()
@@ -45,8 +51,8 @@ def get_full_product_title(product_url: str, fallback_name: str) -> str:
     print(f"-> API 이름으로 대체: {fallback_name}")
     return fallback_name
 
+
 def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> str:
-    """쿠팡 Open API 인증 헤더(Authorization) 생성"""
     path, *query = url.split("?")
     os.environ["TZ"] = "GMT+0"
     time.tzset()
@@ -62,9 +68,6 @@ def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> st
 
 
 def create_deeplink(product_urls, access_key: str, secret_key: str) -> list:
-    """
-    상품 URL 리스트를 파트너스 딥링크로 변환.
-    """
     method = "POST"
     path = "/v2/providers/affiliate_open_api/apis/openapi/v1/deeplink"
     authorization = generate_hmac(method, path, secret_key, access_key)
@@ -83,25 +86,6 @@ def create_deeplink(product_urls, access_key: str, secret_key: str) -> list:
         raise RuntimeError(f"딥링크 생성 실패: {result.get('rMessage')}")
 
     return result["data"]
-
-
-def search_products(keyword: str, access_key: str, secret_key: str, limit: int = 10) -> list:
-    method = "GET"
-    path = (
-        f"/v2/providers/affiliate_open_api/apis/openapi/products/search"
-        f"?keyword={requests.utils.quote(keyword)}&limit={limit}"
-    )
-    authorization = generate_hmac(method, path, secret_key, access_key)
-    headers = {"Authorization": authorization}
-
-    resp = requests.get(DOMAIN + path, headers=headers)
-    resp.raise_for_status()
-    result = resp.json()
-
-    if result.get("rCode") != "0":
-        raise RuntimeError(f"상품 검색 실패: {result.get('rMessage')}")
-
-    return result["data"]["productData"]
 
 
 def get_goldbox_products(access_key: str, secret_key: str, limit: int = 20) -> list:
@@ -141,12 +125,7 @@ def get_best_category_products(
     return result["data"]
 
 
-DEFAULT_CATEGORY_IDS = [
-    "1024",  # 생활용품
-    "1012",  # 주방용품
-    "1010",  # 뷰티
-    "1013",  # 식품
-]
+DEFAULT_CATEGORY_IDS = ["1024", "1012", "1010", "1013"]
 
 
 def get_best_products_pool(
