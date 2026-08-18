@@ -152,6 +152,9 @@ def main():
         print("딥링크 변환 가능한 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
+    # [디버그] API가 실제로 어떤 필드를 주는지 전체 확인 (숨은 수량 필드가 있는지 찾기 위함)
+    print(f"[디버그] API 원본 데이터 전체: {json.dumps(target, ensure_ascii=False, indent=2)}")
+
     product_name = get_full_product_title(target_clean_url, target["productName"])
     price = target.get("productPrice", 0)
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
@@ -167,7 +170,7 @@ def main():
     # 이미지를 직접 첨부하지 않고 TEXT로 게시 -> 쓰레드가 링크를 스캔해서
     # 사진+상품명+가격이 담긴 미리보기 카드를 자동으로 붙여줌 ("광고" 라벨도 이때 같이 붙음)
     media_id = post_to_threads(
-        threads_user_id, threads_access_token, caption
+        threads_user_id, threads_access_token, caption, topic_tag="광고"
     )
     print(f"게시 완료. media_id={media_id}")
 
