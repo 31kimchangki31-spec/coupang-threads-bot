@@ -10,10 +10,11 @@ import requests
 BASE_URL = "https://graph.threads.net/v1.0"
 
 
-def post_to_threads(user_id: str, access_token: str, text: str, image_url: str = None) -> str:
+def post_to_threads(user_id: str, access_token: str, text: str, image_url: str = None, topic_tag: str = None) -> str:
     """
     쓰레드에 게시글을 올린다.
     image_url을 주면 이미지 포함 게시물, 없으면 텍스트만.
+    topic_tag를 주면 해당 주제 태그가 게시물에 붙는다 (1~50자, 마침표/앰퍼샌드 불가).
     반환: 게시된 미디어 id
     """
     # 1. 컨테이너 생성
@@ -27,6 +28,8 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
         params["image_url"] = image_url
     else:
         params["media_type"] = "TEXT"
+    if topic_tag:
+        params["topic_tag"] = topic_tag
 
     resp = requests.post(create_url, params=params)
     if not resp.ok:
