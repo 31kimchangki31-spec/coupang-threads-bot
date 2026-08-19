@@ -3,7 +3,7 @@ name: Coupang -> Threads 자동 게시
 on:
   schedule:
     # 한국시간(KST) 오전 7시 ~ 다음날 오전 6시(23시간) 동안 매시 정각 근처(5분)에 실행 트리거.
-    - cron: "5 22-23,0-20 * * *"
+    - cron: "5,35 22-23,0-20 * * *"
   workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
 
 permissions:
