@@ -2,19 +2,37 @@ name: Coupang -> Threads 자동 게시
 
 on:
   schedule:
-    # 한국시간(KST) 오전 7시 ~ 다음날 오전 6시(23시간) 동안 매시 정각 근처(5분)에 실행 트리거.
-    - cron: "5,35 22-23,0-20 * * *"
-  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
+    # GitHub Actions는 UTC 기준
+    #
+    # 한국시간(KST)
+    # 07:00 ~ 23:30
+    # 00:00 ~ 05:30
+    #
+    # 즉, KST 기준 07:00부터 다음날 05:30까지
+    # 30분마다 실행
+    - cron: "0,30 22-23,0-20 * * *"
+
+  workflow_dispatch: {}
+
+# 같은 workflow가 겹쳐서 동시에 게시되는 것을 방지
+concurrency:
+  group: coupang-threads-auto-post
+  cancel-in-progress: false
 
 permissions:
-  contents: write   # posted.json 커밋을 위해 필요
+  contents: write
 
 jobs:
   post:
     runs-on: ubuntu-latest
+
+    timeout-minutes: 20
+
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 파이썬 설치
         uses: actions/setup-python@v5
@@ -26,25 +44,24 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium
 
-      - name: 랜덤 대기 (5~10분)
-        run: |
-          DELAY=$((RANDOM % 300 + 300))
-          echo "이번 실행은 ${DELAY}초(약 $((DELAY/60))분) 대기 후 게시합니다."
-          sleep $DELAY
-
       - name: 자동 게시 실행
         env:
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # AI 캡션 쓰려면 주석 해제
         run: python main.py
 
       - name: 게시 기록 커밋
         run: |
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
-          git add posted.json
-          git diff --cached --quiet || git commit -m "chore: 게시 기록 업데이트"
-          git push
+
+          git add posted.json posted_slots.json
+
+          if git diff --cached --quiet; then
+            echo "커밋할 변경사항이 없습니다."
+          else
+            git commit -m "chore: 게시 기록 업데이트"
+            git push
+          fi
