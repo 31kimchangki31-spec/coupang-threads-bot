@@ -14,6 +14,7 @@ Coupang(골드박스) -> Threads 자동 게시 (스크린샷 방식)
 import os
 import sys
 import json
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 
 from coupang_api import get_goldbox_products, create_deeplink
@@ -25,17 +26,31 @@ from image_host import upload_image_get_url
 POSTED_FILE = "posted.json"
 SCREENSHOT_PATH = "goldbox_item.png"
 
+KST = timezone(timedelta(hours=9))
 
-def load_posted():
+
+def today_label() -> str:
+    """골드박스가 매일 오전 7시(KST)에 갱신되므로, 그날그날 구분용 날짜 라벨."""
+    return datetime.now(KST).strftime("%Y-%m-%d")
+
+
+def load_posted() -> set:
+    """
+    게시 기록을 불러온다. 저장된 날짜가 오늘과 다르면(=골드박스가 갱신된 새 날이면)
+    자동으로 빈 목록으로 새로 시작해서, 오늘 하루 안에서만 중복을 막는다.
+    """
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("date") == today_label():
+            return set(data.get("urls", []))
     return set()
 
 
-def save_posted(posted_urls):
+def save_posted(posted_urls: set):
+    data = {"date": today_label(), "urls": list(posted_urls)}
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(posted_urls), f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def normalize_product_url(raw_url: str) -> str:
