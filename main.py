@@ -130,8 +130,10 @@ def main():
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
     print(f"딥링크: {deeplink}")
 
-    # 3. 골드박스 페이지에서 해당 카드 스크린샷 캡처
-    got_screenshot = capture_goldbox_card_screenshot(price, product_name, SCREENSHOT_PATH)
+    # 3. 골드박스 페이지에서 해당 카드 스크린샷 캡처 (전체 상품명/할인율도 같이 파싱)
+    got_screenshot, full_name, parsed_discount_rate = capture_goldbox_card_screenshot(
+        price, product_name, SCREENSHOT_PATH
+    )
 
     if not got_screenshot:
         print("스크린샷 확보 실패 - 이번 회차는 게시하지 않고 스킵합니다.")
@@ -147,8 +149,11 @@ def main():
         print(f"이미지 업로드 실패 - 이번 회차는 게시하지 않고 스킵합니다: {e}")
         sys.exit(0)
 
-    # 5. 캡션 생성 (이미지에 정가/할인율/전체이름이 다 담기므로 본문은 짧게)
-    caption = generate_caption(product_name, price, deeplink, discount_rate=target.get("discountRate"))
+    # 4. 최종 할인율: 카드에서 파싱된 값이 있으면 그걸 우선 사용, 없으면 API 값 사용
+    discount_rate = parsed_discount_rate or target.get("discountRate")
+
+    # 5. 캡션 생성 (전체 상품명 + 할인율 반영)
+    caption = generate_caption(full_name, price, deeplink, discount_rate=discount_rate)
     print(f"게시 문구:\n{caption}")
 
     # 6. 쓰레드 게시
