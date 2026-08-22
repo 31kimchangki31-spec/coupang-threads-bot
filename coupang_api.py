@@ -15,9 +15,9 @@ DOMAIN = "https://api-gateway.coupang.com"
 def generate_hmac(method: str, url: str, secret_key: str, access_key: str) -> str:
     """쿠팡 Open API 인증 헤더(Authorization) 생성"""
     path, *query = url.split("?")
-    os.environ["TZ"] = "GMT+0"
-    time.tzset()
-    datetime_str = time.strftime("%y%m%d") + "T" + time.strftime("%H%M%S") + "Z"
+    # time.tzset()은 유닉스 전용이라 윈도우에서 에러남 -> gmtime()으로 UTC를 직접 구해 크로스플랫폼 호환
+    utc_now = time.gmtime()
+    datetime_str = time.strftime("%y%m%d", utc_now) + "T" + time.strftime("%H%M%S", utc_now) + "Z"
     message = datetime_str + method + path + (query[0] if query else "")
     signature = hmac.new(
         bytes(secret_key, "utf-8"), message.encode("utf-8"), hashlib.sha256
