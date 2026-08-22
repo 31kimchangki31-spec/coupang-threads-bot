@@ -2,18 +2,45 @@
 """
 쿠팡 골드박스 페이지에서 특정 상품 카드를 실제 브라우저로 열어
 화면 그대로 스크린샷으로 캡처하는 모듈.
-API가 안 주는 정가/할인율/전체 상품명이 카드 이미지 안에 이미 다 담겨있어서,
-텍스트 파싱 없이 이미지 하나로 해결한다.
+이미지에도 정보가 다 담기지만, 게시글 본문 텍스트에도 쓸 수 있게
+카드 텍스트에서 전체 상품명/할인율도 같이 파싱해서 반환한다.
 """
+import re
 from playwright.sync_api import sync_playwright
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
+# "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
+# 반드시 "할인"이라는 단어가 붙어있는 것만 할인율로 인정
+DISCOUNT_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
 
-def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_path: str) -> bool:
+# 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
+SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
+
+
+def _parse_card_text(text: str, fallback_name: str):
+    """카드의 전체 텍스트에서 전체 상품명과 할인율(있으면)을 뽑아낸다."""
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    full_name = fallback_name
+    discount_rate = None
+
+    for line in lines:
+        m = DISCOUNT_PATTERN.search(line)
+        if m and discount_rate is None:
+            discount_rate = float(m.group(1))
+            continue
+        if not SKIP_LINE_PATTERN.search(line) and len(line) > 3:
+            full_name = line
+            break
+
+    return full_name, discount_rate
+
+
+def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_path: str):
     """
     골드박스 페이지에서 target_price(가격)와 target_name(상품명 일부)이 둘 다 일치하는
-    카드를 찾아 스크린샷으로 저장한다. 성공하면 True, 못 찾으면 False.
+    카드를 찾아 스크린샷으로 저장한다.
+    반환: (found: bool, full_name: str, discount_rate: float|None)
     """
     price_str = f"{int(target_price):,}"
     # 상품명이 너무 길면 앞부분 10자 정도만으로 느슨하게 매칭 (사소한 표기 차이 대비)
@@ -42,6 +69,8 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         found = False
+        full_name = target_name
+        discount_rate = None
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
@@ -81,7 +110,9 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
                     continue
                 if price_str in text and name_fragment in text:
                     card.screenshot(path=output_path)
+                    full_name, discount_rate = _parse_card_text(text, target_name)
                     print(f"[스크린샷] 매칭 성공, 저장: {output_path}")
+                    print(f"[스크린샷] 파싱된 전체 상품명: {full_name} / 할인율: {discount_rate}")
                     found = True
                     break
 
@@ -93,4 +124,4 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
         finally:
             browser.close()
 
-    return found
+    return found, full_name, discount_rate
