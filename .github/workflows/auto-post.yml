@@ -16,10 +16,9 @@ jobs:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
 
-      - name: 파이썬 설치
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: 파이썬 버전 확인 (PC에 미리 설치된 파이썬 사용)
+        shell: bash
+        run: python --version
 
       - name: 의존성 설치
         run: pip install -r requirements.txt
