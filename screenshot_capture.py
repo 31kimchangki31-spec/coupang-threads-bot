@@ -22,6 +22,7 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
+            channel="chromium",
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
