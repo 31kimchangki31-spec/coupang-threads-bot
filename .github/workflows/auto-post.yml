@@ -32,7 +32,8 @@ jobs:
           # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # AI 캡션 쓰려면 주석 해제
         run: python main.py
 
-      - name: 게시 기록(posted.json) 커밋
+      - name: 게시 기록 커밋
+        shell: bash
         run: |
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
