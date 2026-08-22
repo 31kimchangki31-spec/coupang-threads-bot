@@ -63,4 +63,4 @@ def refresh_long_lived_token(access_token: str, app_secret: str = None) -> dict:
     }
     resp = requests.get(url, params=params)
     resp.raise_for_status()
-    return resp.json()
+    return resp.json()  # {"access_token": "...", "expires_in": 5184000}
