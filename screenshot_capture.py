@@ -11,8 +11,10 @@ from playwright.sync_api import sync_playwright
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
 # "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
-# 반드시 "할인"이라는 단어가 붙어있는 것만 할인율로 인정
-DISCOUNT_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
+# "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
+# ("99% 판매됨"처럼 다른 글자가 붙은 줄은 제외됨)
+DISCOUNT_WITH_LABEL_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
+BARE_PERCENT_PATTERN = re.compile(r"^(\d+)\s*%$")
 
 # 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
 SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
@@ -25,10 +27,11 @@ def _parse_card_text(text: str, fallback_name: str):
     discount_rate = None
 
     for line in lines:
-        m = DISCOUNT_PATTERN.search(line)
-        if m and discount_rate is None:
-            discount_rate = float(m.group(1))
-            continue
+        if discount_rate is None:
+            m = DISCOUNT_WITH_LABEL_PATTERN.search(line) or BARE_PERCENT_PATTERN.match(line)
+            if m:
+                discount_rate = float(m.group(1))
+                continue
         if not SKIP_LINE_PATTERN.search(line) and len(line) > 3:
             full_name = line
             break
