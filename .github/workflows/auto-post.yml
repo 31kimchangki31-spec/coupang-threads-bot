@@ -2,13 +2,12 @@ name: Coupang -> Threads 자동 게시
 
 on:
   schedule:
-    # 한국시간(KST) 오전 7시 ~ 자정(24시) 동안 30분 간격 실행 트리거.
-    # 분을 0/30(정각)이 아니라 5/35로 잡아서 GitHub 혼잡 시간대를 피함.
+    # 매일 UTC 00:00 = 한국시간(KST) 오전 9시
     - cron: "5,35 22-23,0-14 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
 
 permissions:
-  contents: write
+  contents: write   # posted.json 커밋을 위해 필요
 
 jobs:
   post:
@@ -21,20 +20,8 @@ jobs:
         shell: bash
         run: python --version
 
-      - name: 파이썬 패키지 설치
-        shell: bash
+      - name: 의존성 설치
         run: pip install -r requirements.txt
-
-      - name: Playwright 브라우저 설치
-        shell: bash
-        run: playwright install --with-deps chromium
-
-      - name: Playwright 설치 확인
-        shell: bash
-        run: |
-          echo "설치된 브라우저 목록:"
-          ls -la ~/.cache/ms-playwright/ || echo "캐시 폴더가 없습니다 (설치 실패)"
-          python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(channel='chromium'); print('브라우저 정상 실행 확인'); b.close(); p.stop()"
 
       - name: 랜덤 대기 (1~5분)
         shell: bash
@@ -42,7 +29,6 @@ jobs:
           DELAY=$((RANDOM % 240 + 60))
           echo "이번 실행은 ${DELAY}초(약 $((DELAY/60))분) 대기 후 게시합니다."
           sleep $DELAY
-
       - name: 자동 게시 실행
         shell: bash
         env:
@@ -53,17 +39,6 @@ jobs:
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: python main.py
-
-      - name: 디버그 스크린샷 업로드
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots
-          path: |
-            debug_full_page.png
-            goldbox_item.png
-          if-no-files-found: ignore
-          retention-days: 3
 
       - name: 게시 기록 커밋
         shell: bash
