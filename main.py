@@ -131,18 +131,21 @@ def main():
     print(f"딥링크: {deeplink}")
 
     # 3. 골드박스 페이지에서 해당 카드 스크린샷 캡처
-    image_url = None
     got_screenshot = capture_goldbox_card_screenshot(price, product_name, SCREENSHOT_PATH)
 
-    # 4. 스크린샷 성공 + imgbb 키 있으면 업로드해서 공개 URL 확보
-    if got_screenshot and imgbb_api_key:
-        try:
-            image_url = upload_image_get_url(SCREENSHOT_PATH, imgbb_api_key)
-        except Exception as e:
-            print(f"[이미지 호스팅] 업로드 실패, 이미지 없이 진행: {e}")
-            image_url = None
-    elif got_screenshot and not imgbb_api_key:
-        print("[이미지 호스팅] IMGBB_API_KEY가 설정되지 않아 이미지 없이 진행합니다.")
+    if not got_screenshot:
+        print("스크린샷 확보 실패 - 이번 회차는 게시하지 않고 스킵합니다.")
+        sys.exit(0)
+
+    if not imgbb_api_key:
+        print("IMGBB_API_KEY가 설정되지 않아 이미지를 올릴 수 없습니다 - 스킵합니다.")
+        sys.exit(0)
+
+    try:
+        image_url = upload_image_get_url(SCREENSHOT_PATH, imgbb_api_key)
+    except Exception as e:
+        print(f"이미지 업로드 실패 - 이번 회차는 게시하지 않고 스킵합니다: {e}")
+        sys.exit(0)
 
     # 5. 캡션 생성 (이미지에 정가/할인율/전체이름이 다 담기므로 본문은 짧게)
     caption = generate_caption(product_name, price, deeplink, discount_rate=target.get("discountRate"))
