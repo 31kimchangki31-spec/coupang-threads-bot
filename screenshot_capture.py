@@ -45,6 +45,13 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(4000)
+
+            # [디버그] 실제로 어떤 페이지가 로드됐는지 확인 (차단/리다이렉트 여부 파악용)
+            print(f"[디버그] 페이지 제목: {page.title()}")
+            print(f"[디버그] 최종 URL: {page.url}")
+            page.screenshot(path="debug_full_page.png", full_page=False)
+            print("[디버그] 전체 화면 스크린샷 저장: debug_full_page.png")
+
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000)
 
