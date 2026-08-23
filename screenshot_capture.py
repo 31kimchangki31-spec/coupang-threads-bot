@@ -16,8 +16,28 @@ GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 DISCOUNT_WITH_LABEL_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
 BARE_PERCENT_PATTERN = re.compile(r"^(\d+)\s*%$")
 
+# 배지 텍스트(%) 파싱이 상품마다 레이아웃이 달라 실패할 수 있어서,
+# "판매가원 정가원"처럼 가격이 두 개 붙어있으면 직접 할인율을 계산하는 폴백
+TWO_PRICE_PATTERN = re.compile(r"([\d,]+)\s*원[^0-9]{0,10}?([\d,]+)\s*원")
+
 # 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
 SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
+
+
+def _compute_discount_from_prices(text: str):
+    """'16,500원 27,900원'처럼 가격이 두 개 붙어있으면 할인율을 직접 계산."""
+    m = TWO_PRICE_PATTERN.search(text)
+    if not m:
+        return None
+    try:
+        price_a = int(m.group(1).replace(",", ""))
+        price_b = int(m.group(2).replace(",", ""))
+    except ValueError:
+        return None
+    sale, original = min(price_a, price_b), max(price_a, price_b)
+    if original <= sale or original <= 0:
+        return None
+    return round((original - sale) / original * 100)
 
 
 def _parse_card_text(text: str, fallback_name: str):
@@ -35,6 +55,12 @@ def _parse_card_text(text: str, fallback_name: str):
         if not SKIP_LINE_PATTERN.search(line) and len(line) > 3:
             full_name = line
             break
+
+    # 배지 텍스트로 못 찾았으면, 가격 두 개로 직접 계산 시도
+    if discount_rate is None:
+        computed = _compute_discount_from_prices(text)
+        if computed is not None:
+            discount_rate = float(computed)
 
     return full_name, discount_rate
 
@@ -65,6 +91,7 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1920, "height": 1080},
+            device_scale_factor=2,  # 2배 밀도로 캡처해서 사진이 더 선명하게 나오도록 함
             locale="ko-KR",
             timezone_id="Asia/Seoul",
         )
