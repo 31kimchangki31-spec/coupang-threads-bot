@@ -53,6 +53,21 @@ def save_posted(posted_urls: set):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def product_key(raw_url: str) -> str:
+    """
+    productUrl 원본에는 매 API 호출마다 바뀌는 traceid가 포함돼 있어서
+    URL 전체를 그대로 중복 판단 키로 쓰면 안 된다 (같은 상품도 매번 다른 문자열이 됨).
+    itemId/vendorItemId(상품 고유값)만 뽑아서 안정적인 키로 사용한다.
+    """
+    parsed = urlparse(raw_url)
+    params = parse_qs(parsed.query)
+    item_id = params.get("itemId", [None])[0]
+    vendor_item_id = params.get("vendorItemId", [None])[0]
+    if item_id or vendor_item_id:
+        return f"{item_id}:{vendor_item_id}"
+    return raw_url  # 뽑을 게 없으면 마지막 수단으로 원본 URL 사용
+
+
 def normalize_product_url(raw_url: str) -> str:
     """
     골드박스 API가 주는 URL은 이미 다른 제휴 태그(lptag)가 찍힌
@@ -123,7 +138,7 @@ def main():
     target = None
     deeplink = None
     for candidate in candidates:
-        if candidate["productUrl"] in posted:
+        if product_key(candidate["productUrl"]) in posted:
             continue
         clean_url = normalize_product_url(candidate["productUrl"])
         print(f"[골드박스] 시도: {candidate['productName']} / 정리된 URL: {clean_url}")
@@ -179,7 +194,7 @@ def main():
     print(f"게시 완료. media_id={media_id} (이미지 포함: {bool(image_url)})")
 
     # 7. 기록 저장
-    posted.add(target["productUrl"])
+    posted.add(product_key(target["productUrl"]))
     save_posted(posted)
 
 
