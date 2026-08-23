@@ -6,6 +6,7 @@
 카드 텍스트에서 전체 상품명/할인율도 같이 파싱해서 반환한다.
 """
 import re
+import math
 from playwright.sync_api import sync_playwright
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
@@ -34,13 +35,10 @@ def _compute_discount_from_prices(text: str):
         price_b = int(m.group(2).replace(",", ""))
     except ValueError:
         return None
-        
     sale, original = min(price_a, price_b), max(price_a, price_b)
     if original <= sale or original <= 0:
         return None
-        
-    # int()를 사용하여 계산된 비율의 소수점 이하를 버림 처리
-    return int((original - sale) / original * 100)
+    return math.floor((original - sale) / original * 100)
 
 
 HANGUL_PATTERN = re.compile(r"[가-힣]")
