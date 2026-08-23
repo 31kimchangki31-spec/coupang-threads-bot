@@ -34,10 +34,13 @@ def _compute_discount_from_prices(text: str):
         price_b = int(m.group(2).replace(",", ""))
     except ValueError:
         return None
+        
     sale, original = min(price_a, price_b), max(price_a, price_b)
     if original <= sale or original <= 0:
         return None
-    return round((original - sale) / original * 100)
+        
+    # int()를 사용하여 계산된 비율의 소수점 이하를 버림 처리
+    return int((original - sale) / original * 100)
 
 
 HANGUL_PATTERN = re.compile(r"[가-힣]")
