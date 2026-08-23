@@ -40,6 +40,9 @@ def _compute_discount_from_prices(text: str):
     return round((original - sale) / original * 100)
 
 
+HANGUL_PATTERN = re.compile(r"[가-힣]")
+
+
 def _parse_card_text(text: str, fallback_name: str):
     """카드의 전체 텍스트에서 전체 상품명과 할인율(있으면)을 뽑아낸다."""
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -52,7 +55,12 @@ def _parse_card_text(text: str, fallback_name: str):
             if m:
                 discount_rate = float(m.group(1))
                 continue
-        if not SKIP_LINE_PATTERN.search(line) and len(line) > 3:
+        # 브랜드 로고 줄(예: "LA BRUKET")은 한글이 없어서 걸러짐 -> 실제 상품명만 남음
+        if (
+            not SKIP_LINE_PATTERN.search(line)
+            and len(line) > 3
+            and HANGUL_PATTERN.search(line)
+        ):
             full_name = line
             break
 
