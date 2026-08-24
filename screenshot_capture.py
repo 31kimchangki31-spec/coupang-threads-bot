@@ -118,9 +118,11 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
 
-            # 상품명이 한 번에 뜨는 게 아니라 페이지 진입 후 몇 초에 걸쳐
-            # 하나씩 채워지는 페이지라서, 고정 대기 대신 실제로 상품 링크가
-            # 나타날 때까지 최대 15초간 폴링한다.
+            # 페이지 진입 직후 아주 넉넉하게 10초 고정 대기 (요청 반영)
+            page.wait_for_timeout(10000)
+
+            # 그래도 혹시 더 늦게 뜨는 경우를 대비해, 상품 링크가 나타날 때까지
+            # 최대 15초 추가 폴링 (이미 떠 있으면 바로 통과)
             for _ in range(30):
                 if page.query_selector_all(product_link_selector):
                     break
