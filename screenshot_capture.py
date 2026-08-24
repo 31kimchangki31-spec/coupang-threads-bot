@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Playwright를 사용하여 골드박스 페이지에서 대상 상품 카드를 찾고 스크린샷을 캡처하는 모듈.
-(Akamai/Cloudflare 봇 차단 강하게 우회 + outerHTML ID 매칭 지원)
+(Akamai 봇 차단 우회 + 골드박스 프로모션 페이지 맞춤형 유연한 텍스트/키워드/가격 매칭)
 """
 import re
 import time
@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 
 
 def _clean_keywords(name: str) -> list:
-    """상품명에서 [로켓프레시] 등 대괄호 태그를 제거하고 실질적 키워드를 추출한다."""
+    """상품명에서 [로켓프레시] 등 대괄호 태그를 제거하고 의미 있는 핵심 키워드를 추출한다."""
     cleaned_name = re.sub(r"\[[^\]]+\]", " ", name)
     cleaned = re.sub(r"[^\w\s]", " ", cleaned_name)
     tokens = [t.strip() for t in cleaned.split() if len(t.strip()) > 1]
@@ -42,26 +42,15 @@ def _deep_extract_ids(candidate_tuple: tuple) -> list:
 def apply_stealth_scripts(page):
     """쿠팡 Akamai 봇 감지 우회를 위한 스텔스 스크립트 주입"""
     page.add_init_script("""
-        // 1. webdriver 속성 숨기기
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-        // 2. chrome 객체 가상화
         window.chrome = {
             runtime: {},
             loadTimes: function() {},
             csi: function() {},
             app: {}
         };
-
-        // 3. plugins / mimeTypes 가상화
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5]
-        });
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['ko-KR', 'ko', 'en-US', 'en']
-        });
-
-        // 4. Permissions API 우회
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en-US', 'en'] });
         const originalQuery = window.navigator.permissions.query;
         window.navigator.permissions.query = (parameters) => (
             parameters.name === 'notifications' ?
@@ -127,7 +116,7 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         except Exception as e:
             print(f"[스크린샷] 메인 접속 경고 (계속 진행): {e}")
 
-        # Step 2: 골드박스 이벤트 페이지 직접 접속
+        # Step 2: 골드박스 이벤트 페이지 접속
         print(f"[스크린샷] 골드박스 페이지 접속 시도: {target_goldbox_url}")
         try:
             page.goto(target_goldbox_url, wait_until="domcontentloaded", timeout=30000)
@@ -141,13 +130,10 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         print(f"[디버그] 최종 URL: {page.url}")
 
         if "Access Denied" in page.title():
-            print("[에러] 여전히 Access Denied 발생 - 재시도 수행")
-            # 2초 대기 후 새로고침 시도
+            print("[에러] Access Denied 발생 - 새로고침 재시도")
             time.sleep(2)
             page.reload(wait_until="domcontentloaded")
             time.sleep(3)
-            print(f"[디버그] 재시도 후 제목: {page.title()}")
-
             if "Access Denied" in page.title():
                 print("[에러] 봇 차단 우회 실패.")
                 browser.close()
@@ -185,9 +171,9 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             try:
                 text = card.inner_text() or ""
                 outer_html = card.evaluate("el => el.outerHTML") or ""
-                if not text and not outer_html:
-                    continue
-                cards_data.append((card, text, outer_html))
+                # 카드에 텍스트나 의미 있는 내용이 있는 경우에만 포함
+                if len(text.strip()) > 3 or "href" in outer_html:
+                    cards_data.append((card, text, outer_html))
             except Exception:
                 continue
 
@@ -197,37 +183,56 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             keywords = _clean_keywords(name)
 
             brand_keyword = keywords[0] if keywords else ""
-            price_num_str = str(int(price)) if price else ""
-            price_formatted = f"{int(price):,}" if price else ""
+            sub_keywords = keywords[1:] if len(keywords) > 1 else []
+            
+            price_int = int(price) if price else 0
+            price_num_str = str(price_int)
+            price_formatted = f"{price_int:,}"
 
             print(
-                f"[스크린샷] 매칭 시도 -> 브랜드 필수 키워드: '{brand_keyword}' / "
-                f"ID 후보군: {target_ids} / 가격: {price_formatted}원"
+                f"[스크린샷] 매칭 시도 -> 브랜드: '{brand_keyword}' / 키워드목록: {keywords[:4]} / "
+                f"ID: {target_ids} / 가격: {price_formatted}원"
             )
 
             for card, text, outer_html in cards_data:
                 is_matched = False
+                matched_reason = ""
 
-                # 1. 고유 ID 일치 (outerHTML 검사)
+                # 1. 고유 ID 일치 (최우선)
                 if target_ids:
                     for tid in target_ids:
                         if tid in outer_html:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 고유 ID({tid}) 매칭 성공!")
+                            matched_reason = f"고유 ID({tid}) 일치"
                             break
 
-                # 2. 브랜드 키워드 필수 검증
-                if not is_matched and brand_keyword and (brand_keyword in outer_html or brand_keyword in text):
-                    if price_num_str and (price_num_str in outer_html or price_formatted in text):
+                # 2. 브랜드 키워드가 포함된 경우 텍스트 기반 매칭
+                if not is_matched and brand_keyword and (brand_keyword in text or brand_keyword in outer_html):
+                    # 2-1. 브랜드 + 가격 일치
+                    if price_num_str and (price_formatted in text or price_num_str in text or price_formatted in outer_html):
                         is_matched = True
-                        print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 가격({price_formatted}) 매칭 성공!")
+                        matched_reason = f"브랜드('{brand_keyword}') + 가격({price_formatted}) 일치"
                     else:
-                        matched_sub_kws = [kw for kw in keywords[1:4] if kw in outer_html or kw in text]
-                        if matched_sub_kws:
+                        # 2-2. 브랜드 + 서브 키워드 조합 일치 (1개 이상 추가 포함)
+                        matched_subs = [kw for kw in sub_keywords[:3] if kw in text or kw in outer_html]
+                        if matched_subs:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 서브키워드({matched_sub_kws}) 매칭 성공!")
+                            matched_reason = f"브랜드('{brand_keyword}') + 서브키워드({matched_subs}) 일치"
+
+                # 3. 브랜드명이 카드에 정확히 포함되지 않더라도 전체 키워드 중 2개 이상 포함 시 매칭
+                if not is_matched and len(keywords) >= 2:
+                    matched_kws = [kw for kw in keywords if kw in text or kw in outer_html]
+                    if len(matched_kws) >= 2:
+                        # 가격 검증 또는 추가 키워드 검증
+                        if price_num_str and (price_formatted in text or price_num_str in text):
+                            is_matched = True
+                            matched_reason = f"복수키워드({matched_kws}) + 가격({price_formatted}) 일치"
+                        elif len(matched_kws) >= 3:
+                            is_matched = True
+                            matched_reason = f"다중키워드({matched_kws}) 일치"
 
                 if is_matched:
+                    print(f"[스크린샷] ✅ 매칭 성공! 사유: {matched_reason}")
                     card.scroll_into_view_if_needed()
                     time.sleep(0.5)
 
