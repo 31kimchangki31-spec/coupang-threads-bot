@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qs
 from coupang_api import get_goldbox_products, create_deeplink
 from caption_generator import generate_caption
 from threads_api import post_to_threads
-from screenshot_capture import capture_goldbox_card_screenshot
+from screenshot_capture import find_and_capture_first_match
 from image_host import upload_image_get_url
 
 POSTED_FILE = "posted.json"
@@ -134,10 +134,12 @@ def main():
     )
     print(f"[골드박스] 후보 {len(candidates)}개")
 
-    # 2. 아직 안 올린 상품 중, 딥링크 변환까지 성공하는 상품 선택
-    target = None
-    deeplink = None
+    # 2. 아직 안 올린 상품들 중, 딥링크 변환에 성공한 것들을 최대 8개까지 모아서
+    #    스크린샷 매칭 후보 목록으로 준비 (하나가 매칭 실패해도 자동으로 다음 걸 시도하기 위함)
+    ready_candidates = []  # [(price, name, candidate_dict, deeplink), ...]
     for candidate in candidates:
+        if len(ready_candidates) >= 8:
+            break
         if product_key(candidate["productUrl"]) in posted:
             continue
         clean_url = normalize_product_url(candidate["productUrl"])
@@ -145,29 +147,32 @@ def main():
         try:
             deeplink_result = create_deeplink([clean_url], coupang_access_key, coupang_secret_key)
             deeplink = deeplink_result[0]["shortenUrl"]
-            target = candidate
-            break
+            price = candidate.get("productPrice", 0)
+            ready_candidates.append((price, candidate["productName"], candidate, deeplink))
         except RuntimeError as e:
             print(f"딥링크 변환 실패, 다음 상품으로 넘어감: {candidate['productName']} ({e})")
             continue
 
-    if target is None:
+    if not ready_candidates:
         print("오늘 골드박스에서 게시 가능한 새 상품을 찾지 못했습니다. 다음 실행에서 재시도합니다.")
         sys.exit(0)
 
-    product_name = target["productName"]
-    price = target.get("productPrice", 0)
-    print(f"선택된 상품: {product_name} ({int(price):,}원)")
-    print(f"딥링크: {deeplink}")
-
-    # 3. 골드박스 페이지에서 해당 카드 스크린샷 캡처 (전체 상품명/할인율도 같이 파싱)
-    got_screenshot, full_name, parsed_discount_rate = capture_goldbox_card_screenshot(
-        price, product_name, SCREENSHOT_PATH
+    # 3. 골드박스 페이지를 한 번만 열고, 준비된 후보들을 순서대로 매칭 시도
+    matched_candidate, full_name, parsed_discount_rate = find_and_capture_first_match(
+        [(price, name, cand) for price, name, cand, _ in ready_candidates],
+        SCREENSHOT_PATH,
     )
 
-    if not got_screenshot:
-        print("스크린샷 확보 실패 - 이번 회차는 게시하지 않고 스킵합니다.")
+    if matched_candidate is None:
+        print("시도한 후보 중 스크린샷 매칭에 성공한 게 없습니다 - 이번 회차는 게시하지 않고 스킵합니다.")
         sys.exit(0)
+
+    # 매칭된 후보에 해당하는 딥링크 찾기
+    target = matched_candidate
+    deeplink = next(dl for _, _, cand, dl in ready_candidates if cand is matched_candidate)
+    price = target.get("productPrice", 0)
+    print(f"선택된 상품: {full_name} ({int(price):,}원)")
+    print(f"딥링크: {deeplink}")
 
     if not imgbb_api_key:
         print("IMGBB_API_KEY가 설정되지 않아 이미지를 올릴 수 없습니다 - 스킵합니다.")
