@@ -78,8 +78,6 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
     골드박스 페이지를 한 번만 열고, candidates_to_try(=[(price, name, candidate_dict), ...])를
     순서대로 시도해서 처음 매칭되는 걸 스크린샷으로 저장한다.
-    이미 상품마다 브라우저를 새로 여는 것보다 훨씬 빠르고, 실패해도 자동으로 다음 후보로 넘어간다.
-    반환: (matched_candidate: dict|None, full_name: str|None, discount_rate: float|None)
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -107,23 +105,30 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
-            page.wait_for_timeout(4000)
+
+            # 1. 요청사항: 접속 후 상품 로딩을 위해 5초 대기
+            page.wait_for_timeout(5000)
+
+            # 2. 리뉴얼 안내 버튼이 화면에 보이면 클릭하여 바로 목록 진입 시도
+            try:
+                btn = page.locator("text='더욱 새로워진 골드박스 살펴보기'")
+                if btn.is_visible(timeout=2000):
+                    btn.click()
+                    page.wait_for_timeout(2000)
+            except Exception:
+                pass
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
-            page.screenshot(path="debug_full_page.png", full_page=False)
 
-            page.mouse.wheel(0, 1000)
-            page.wait_for_timeout(3000)
-
-            # 카드 개수가 더 이상 안 늘어날 때까지(=거의 다 로딩될 때까지) 반복 스크롤
+            # 3. 아래로 여유 있게 스크롤하여 상품 카드 렌더링 유도
             prev_count = -1
             stable_rounds = 0
             for _ in range(20):
-                page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(700)
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(1000)  # 스크롤 간격을 1초로 늘려 안정성 확보
                 current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
-                if current_count == prev_count:
+                if current_count == prev_count and current_count > 0:
                     stable_rounds += 1
                     if stable_rounds >= 2:
                         break
@@ -131,6 +136,7 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                     stable_rounds = 0
                 prev_count = current_count
 
+            # 카드 요소 수집
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
             )
@@ -149,21 +155,30 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
             print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
-            # 카드 텍스트를 미리 한 번씩만 읽어서 캐싱 (여러 후보와 반복 비교할 때 효율적)
+            # 4. 각 카드를 뷰포트로 스크롤하며 텍스트 추출 (IntersectionObserver 지연 로딩 방지)
             card_texts = []
             for card in cards:
                 try:
-                    card_texts.append((card, card.inner_text()))
+                    card.scroll_into_view_if_needed()
+                    page.wait_for_timeout(150)  # 텍스트가 렌더링될 때까지 미세 대기
+                    text = card.inner_text()
+                    if text:
+                        card_texts.append((card, text))
                 except Exception:
                     continue
 
+            # 5. 매칭 및 스크린샷 캡처
             for price, name, candidate in candidates_to_try:
                 price_str = f"{int(price):,}"
                 name_fragment = name.strip()[:10]
                 print(f"[스크린샷] 매칭 시도: {price_str}원 / '{name_fragment}'")
                 for card, text in card_texts:
                     if price_str in text and name_fragment in text:
+                        # 캡처 직전 카드가 완전히 화면 중앙에 오도록 스크롤 후 캡처
+                        card.scroll_into_view_if_needed()
+                        page.wait_for_timeout(300)
                         card.screenshot(path=output_path)
+                        
                         full_name, discount_rate = _parse_card_text(text, name)
                         print(f"[스크린샷] 매칭 성공: {full_name} / 할인율: {discount_rate}")
                         return candidate, full_name, discount_rate
