@@ -74,16 +74,13 @@ def _parse_card_text(text: str, fallback_name: str):
     return full_name, discount_rate
 
 
-def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_path: str):
+def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    골드박스 페이지에서 target_price(가격)와 target_name(상품명 일부)이 둘 다 일치하는
-    카드를 찾아 스크린샷으로 저장한다.
-    반환: (found: bool, full_name: str, discount_rate: float|None)
+    골드박스 페이지를 한 번만 열고, candidates_to_try(=[(price, name, candidate_dict), ...])를
+    순서대로 시도해서 처음 매칭되는 걸 스크린샷으로 저장한다.
+    이미 상품마다 브라우저를 새로 여는 것보다 훨씬 빠르고, 실패해도 자동으로 다음 후보로 넘어간다.
+    반환: (matched_candidate: dict|None, full_name: str|None, discount_rate: float|None)
     """
-    price_str = f"{int(target_price):,}"
-    # 상품명이 너무 길면 앞부분 10자 정도만으로 느슨하게 매칭 (사소한 표기 차이 대비)
-    name_fragment = target_name.strip()[:10]
-
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -100,32 +97,24 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1920, "height": 1080},
-            device_scale_factor=2,  # 2배 밀도로 캡처해서 사진이 더 선명하게 나오도록 함
+            device_scale_factor=2,
             locale="ko-KR",
             timezone_id="Asia/Seoul",
         )
         page = context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        found = False
-        full_name = target_name
-        discount_rate = None
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(4000)
 
-            # [디버그] 실제로 어떤 페이지가 로드됐는지 확인 (차단/리다이렉트 여부 파악용)
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
             page.screenshot(path="debug_full_page.png", full_page=False)
-            print("[디버그] 전체 화면 스크린샷 저장: debug_full_page.png")
 
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000)
-
-            # 골드박스는 무한 스크롤 방식이라, 한 번만 내리면 상품 몇 개만 로딩된 상태임.
-            # 여러 번 반복 스크롤해서 API가 준 23개 안팎의 상품이 최대한 로딩되게 함.
             for _ in range(8):
                 page.mouse.wheel(0, 1500)
                 page.wait_for_timeout(700)
@@ -146,27 +135,40 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
                     except Exception:
                         continue
 
-            print(f"[스크린샷] 후보 카드 {len(cards)}개 탐색됨. 가격/이름 매칭 시도: {price_str}원 / '{name_fragment}'")
+            print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
+            # 카드 텍스트를 미리 한 번씩만 읽어서 캐싱 (여러 후보와 반복 비교할 때 효율적)
+            card_texts = []
             for card in cards:
                 try:
-                    text = card.inner_text()
+                    card_texts.append((card, card.inner_text()))
                 except Exception:
                     continue
-                if price_str in text and name_fragment in text:
-                    card.screenshot(path=output_path)
-                    full_name, discount_rate = _parse_card_text(text, target_name)
-                    print(f"[스크린샷] 매칭 성공, 저장: {output_path}")
-                    print(f"[스크린샷] 파싱된 전체 상품명: {full_name} / 할인율: {discount_rate}")
-                    found = True
-                    break
 
-            if not found:
-                print("[스크린샷] 일치하는 카드를 찾지 못함 (골드박스 페이지 순서가 API 조회 시점과 달라졌을 수 있음)")
+            for price, name, candidate in candidates_to_try:
+                price_str = f"{int(price):,}"
+                name_fragment = name.strip()[:10]
+                print(f"[스크린샷] 매칭 시도: {price_str}원 / '{name_fragment}'")
+                for card, text in card_texts:
+                    if price_str in text and name_fragment in text:
+                        card.screenshot(path=output_path)
+                        full_name, discount_rate = _parse_card_text(text, name)
+                        print(f"[스크린샷] 매칭 성공: {full_name} / 할인율: {discount_rate}")
+                        return candidate, full_name, discount_rate
+
+            print("[스크린샷] 시도한 후보 중 화면과 일치하는 카드를 하나도 찾지 못함")
+            return None, None, None
 
         except Exception as e:
             print(f"[스크린샷] 실패: {e}")
+            return None, None, None
         finally:
             browser.close()
 
-    return found, full_name, discount_rate
+
+def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_path: str):
+    """(구버전 호환용) 단일 후보만 시도하는 래퍼."""
+    matched, full_name, discount_rate = find_and_capture_first_match(
+        [(target_price, target_name, None)], output_path
+    )
+    return matched is not None, full_name or target_name, discount_rate
