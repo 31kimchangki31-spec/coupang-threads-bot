@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Playwright를 사용하여 골드박스 페이지에서 대상 상품 카드를 찾고 스크린샷을 캡처하는 모듈.
+(쿠팡 Access Denied 봇 차단 우회 기법 적용)
 """
 import re
 import time
@@ -38,23 +39,67 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
     goldbox_url = "https://www.coupang.com/np/goldbox"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # 1. 자동화 브라우저 감지 플래그 제거
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-infobars",
+                "--window-size=1280,1024",
+            ],
+        )
+
+        # 2. 실제 일반 한국 사용자와 동일한 헤더 및 컨텍스트 설정
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+                "Chrome/124.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 1024},
+            locale="ko-KR",
+            timezone_id="Asia/Seoul",
+            extra_http_headers={
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            },
         )
+
         page = context.new_page()
 
+        # 3. navigator.webdriver 속성을 숨겨 봇 감지 회피
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+
         print(f"[스크린샷] 골드박스 페이지 접속 시도: {goldbox_url}")
-        page.goto(goldbox_url, wait_until="networkidle", timeout=30000)
-        time.sleep(2)
+        try:
+            page.goto(goldbox_url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
+        except Exception as e:
+            print(f"[스크린샷] 페이지 접속 실패: {e}")
+            browser.close()
+            return None, None, None
 
         print(f"[디버그] 페이지 제목: {page.title()}")
         print(f"[디버그] 최종 URL: {page.url}")
+
+        if "Access Denied" in page.title():
+            print("[에러] 여전히 쿠팡 봇 차단에 걸렸습니다. 잠시 후 재시도해야 합니다.")
+            browser.close()
+            return None, None, None
 
         # 가상 스크롤 로딩을 위해 하단 스크롤 수행
         for _ in range(5):
@@ -103,7 +148,7 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
                             print(f"[스크린샷] ✅ 고유 ID({tid}) 매칭 성공!")
                             break
 
-                # 2. 브랜드 키워드 필수 검증 (그린, 무라벨 등 일반 속성어 단독 매칭 차단)
+                # 2. 브랜드 키워드 필수 검증
                 if not is_matched and brand_keyword and (brand_keyword in html or brand_keyword in text):
                     # 가격 일치 확인
                     if price_num_str and (price_num_str in html or price_formatted in text):
