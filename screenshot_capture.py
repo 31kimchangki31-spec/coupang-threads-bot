@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-쿠팡 골드박스 페이지(iframe/Shadow DOM 구조)에서 특정 상품 카드를 
-실시간 탐색/스크롤 방식으로 검색하여 스크린샷으로 캡처하는 모듈 (완전판).
+쿠팡 골드박스 페이지 캡처 모듈 (봇 감지 우회 & 범용 DOM 텍스트 탐색 적용 풀버전)
 """
 
 import re
@@ -71,11 +70,11 @@ def _parse_card_text(text: str, fallback_name: str):
     return full_name, discount_rate
 
 
-def extract_product_id(url: str) -> str:
-    """URL에서 쿠팡 상품 고유 ID(ProductID) 추출"""
-    if not url:
+def extract_product_id(text: str) -> str:
+    """URL 또는 속성 텍스트에서 상품 ID 추출"""
+    if not text:
         return ""
-    m = re.search(r"products/(\d+)", url) or re.search(r"itemId=(\d+)", url)
+    m = re.search(r"products/(\d+)", text) or re.search(r"itemId=(\d+)", text) or re.search(r"(\d{7,12})", text)
     if m:
         return m.group(1)
     return ""
@@ -83,10 +82,12 @@ def extract_product_id(url: str) -> str:
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    [Iframe + Realtime Scroll 탐색 방식]
-    모든 프레임(Iframe 포함)을 탐색하며 상품 ID(ProductID) 및 상품명 키워드로 매칭합니다.
+    [Anti-Bot 우회 + Direct DOM Text 탐색]
+    쿠팡의 봇 탐지를 방지하는 스텔스 설정과 함께,
+    a 태그 외에도 화면상에 가격+상품명이 표시된 최하위 카드 요소를 탐색합니다.
     """
     with sync_playwright() as p:
+        # 봇 감지 방지용 Chromium 옵션 강화
         browser = p.chromium.launch(
             headless=True,
             channel="chromium",
@@ -96,6 +97,7 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-web-security",
                 "--window-size=1920,1080",
             ],
         )
@@ -110,27 +112,33 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             timezone_id="Asia/Seoul",
         )
         page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        # 브라우저 위장 스크립트 주입
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.navigator.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR', 'ko', 'en-US', 'en']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        """)
 
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             try:
-                page.goto(GOLDBOX_URL, wait_until="domcontentloaded", timeout=60000)
+                page.goto(GOLDBOX_URL, wait_until="networkidle", timeout=60000)
             except Exception as goto_err:
-                print(f"[스크린샷] 폴백 URL 접근: {FALLBACK_GOLDBOX_URL} ({goto_err})")
+                print(f"[스크린샷] 기본 접속 지연 -> 폴백 URL 접속: {FALLBACK_GOLDBOX_URL}")
                 page.goto(FALLBACK_GOLDBOX_URL, wait_until="domcontentloaded", timeout=60000)
 
             page.wait_for_timeout(3000)
-            print(f"[디버그] 접속 페이지 제목: {page.title()}")
+            print(f"[디버그] 접속 성공 페이지 제목: '{page.title()}'")
 
-            # 매칭 후보군 정보 전처리
+            # 매칭 후보군 키워드 전처리
             prepared_candidates = []
             for price, name, candidate in candidates_to_try:
                 price_num = int(price) if price else 0
                 price_str = f"{price_num:,}" if price_num > 0 else ""
                 raw_price_str = str(price_num) if price_num > 0 else ""
-                
-                # 특수문자 제거 후 핵심 상품명 키워드 (4글자 추출)
+
                 clean_name = re.sub(r"\[.*?\]|\(.*?\)", "", name).strip()
                 name_fragment = clean_name[:4] if clean_name else name[:4]
 
@@ -147,79 +155,78 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                     "candidate_data": candidate,
                 })
 
-            processed_hrefs = set()
+            processed_elements = set()
 
-            # --- [실시간 Iframe / DOM 감지 및 스크롤 루프 (35회)] ---
-            for scroll_step in range(35):
-                # 페이지 내 모든 프레임(Main + Iframe) 수집
-                frames_to_search = page.frames
+            # --- [실시간 스크롤 & DOM 탐색 (최대 25회)] ---
+            for scroll_step in range(25):
+                print(f"[스크린샷] 실시간 탐색 단계 {scroll_step + 1}/25")
 
-                for frame_idx, frame in enumerate(frames_to_search):
+                for frame in page.frames:
                     try:
-                        # Playwright Locator로 링크 탐색 (Iframe/Shadow DOM 지원)
-                        link_locators = frame.locator("a[href*='products/'], a[href*='itemId']").all()
-                        if not link_locators:
-                            continue
+                        # 1. 태그 종류에 상관없이 가격 텍스트가 포함된 모든 요소 검색
+                        for cand in prepared_candidates:
+                            if not cand["price_str"]:
+                                continue
 
-                        for link_loc in link_locators:
-                            try:
-                                if not link_loc.is_visible():
-                                    continue
+                            # 가격 텍스트(예: "37,720")를 포함하는 모든 Locator 추출
+                            price_locators = frame.locator(f"text={cand['price_str']}").all()
 
-                                href = link_loc.get_attribute("href") or ""
-                                if href in processed_hrefs:
-                                    continue
+                            for price_loc in price_locators:
+                                try:
+                                    if not price_loc.is_visible():
+                                        continue
 
-                                # 링크의 상위 카드 컨테이너 찾기
-                                card_loc = link_loc.locator("xpath=ancestor::*[self::li or contains(@class, 'item') or contains(@class, 'card') or contains(@class, 'Product')][1]")
-                                if card_loc.count() == 0:
-                                    card_loc = link_loc  # 컨테이너 미발견 시 링크 자체 선택
-
-                                text = card_loc.inner_text()
-                                if not text or not text.strip():
-                                    continue
-
-                                norm_text = _normalize_text(text)
-                                card_pid = extract_product_id(href)
-
-                                for cand in prepared_candidates:
-                                    # 1순위: URL 상품 고유 ID(ProductID) 완전 일치
-                                    pid_matched = bool(cand["target_pid"] and card_pid and cand["target_pid"] == card_pid)
-
-                                    # 2순위: 상품명 키워드 매칭 (가격은 쿠폰/변동 가능성이 있어 보조 조건)
-                                    name_matched = bool(cand["norm_name_fragment"] and cand["norm_name_fragment"] in norm_text)
-                                    price_matched = (cand["price_str"] in text) or (cand["raw_price_str"] in norm_text) if cand["price_str"] else True
+                                    # 가격 표시 요소의 상위 카드 컨테이너(가장 가까운 div/li/a) 추적
+                                    card_loc = price_loc.locator("xpath=ancestor::*[self::li or self::a or contains(@class, 'item') or contains(@class, 'card') or contains(@class, 'Product') or contains(@class, 'unit')][1]")
                                     
-                                    text_matched = name_matched and price_matched
+                                    if card_loc.count() == 0:
+                                        card_loc = price_loc.locator("xpath=ancestor::div[contains(@style, 'width') or contains(@class, 'div')][2]")
 
-                                    if pid_matched or text_matched:
-                                        match_type = "상품 ID" if pid_matched else "상품명 키워드"
-                                        print(f"[스크린샷] 매칭 성공! (단계 {scroll_step+1}, 방식: {match_type}) -> 키워드 '{cand['orig_name_fragment']}'")
+                                    if card_loc.count() == 0:
+                                        continue
 
-                                        # 요소를 화면 중앙으로 스크롤 후 이미지 렌더링 대기
+                                    text = card_loc.inner_text()
+                                    norm_text = _normalize_text(text)
+
+                                    # 중복 처리 방지
+                                    if norm_text in processed_elements:
+                                        continue
+
+                                    # 상품명 키워드 매칭 검사
+                                    name_matched = cand["norm_name_fragment"] and (cand["norm_name_fragment"] in norm_text)
+                                    card_pid = extract_product_id(text)
+                                    pid_matched = bool(cand["target_pid"] and card_pid and cand["target_pid"] in text)
+
+                                    if name_matched or pid_matched:
+                                        match_reason = "상품 ID" if pid_matched else "가격 + 키워드"
+                                        print(f"[스크린샷] ★ 매칭 성공! ({match_reason}) -> 키워드: '{cand['orig_name_fragment']}' / 가격: {cand['price_str']}원")
+
+                                        # 카드로 스크롤 후 이미지 렌더링 대기
                                         card_loc.scroll_into_view_if_needed()
-                                        page.wait_for_timeout(1200)
+                                        page.wait_for_timeout(1000)
 
-                                        # 스크린샷 저장
+                                        # 스크린샷 캡처
                                         card_loc.screenshot(path=output_path)
 
                                         full_name, discount_rate = _parse_card_text(text, cand["fallback_name"])
-                                        print(f"[스크린샷] 캡처 완료 ({output_path}) | 상품명: {full_name} | 할인율: {discount_rate}%")
+                                        print(f"[스크린샷] 캡처 완료 -> {output_path} (상품명: {full_name}, 할인율: {discount_rate}%)")
                                         return cand["candidate_data"], full_name, discount_rate
 
-                                if href:
-                                    processed_hrefs.add(href)
+                                    processed_elements.add(norm_text)
 
-                            except Exception:
-                                continue
+                                except Exception:
+                                    continue
                     except Exception:
                         continue
 
-                # 화면 탐색 후 스크롤 내림
-                page.mouse.wheel(0, 700)
+                # 마우스 휠 스크롤 후 콘텐츠 추가 로딩 대기
+                page.mouse.wheel(0, 650)
                 page.wait_for_timeout(1000)
 
-            print("[스크린샷] 전체 스크롤 탐색 완료 후에도 일치하는 카드를 찾지 못함")
+            # 탐색 실패 시 원인 진단을 위한 현재 화면 스크린샷 저장
+            print("[스크린샷] 매칭 실패 -> 원인 진단용 화면 'debug_page.png' 저장 중...")
+            page.screenshot(path="debug_page.png", full_page=True)
+            print("[스크린샷] debug_page.png 파일이 생성되었습니다. 브라우저에 표시된 화면을 확인하세요.")
             return None, None, None
 
         except Exception as e:
@@ -238,7 +245,6 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
 
 
 if __name__ == "__main__":
-    # 테스트 실행
     test_candidates = [
         (
             37720,
