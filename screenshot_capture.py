@@ -113,6 +113,8 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         try:
+            product_link_selector = "a[href*='/vp/products/']"
+
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
 
@@ -120,15 +122,17 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             # 하나씩 채워지는 페이지라서, 고정 대기 대신 실제로 상품 링크가
             # 나타날 때까지 최대 15초간 폴링한다.
             for _ in range(30):
-                if page.query_selector_all("a[href*='/vp/products/']"):
+                if page.query_selector_all(product_link_selector):
                     break
                 page.wait_for_timeout(500)
             # 첫 상품이 뜬 뒤에도 나머지 카드들이 이어서 채워지므로 추가로 잠깐 더 대기
             page.wait_for_timeout(3000)
 
+            entry_link_count = len(page.query_selector_all(product_link_selector))
+
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
-            print(f"[디버그] 진입 직후 상품 링크 개수: {len(page.query_selector_all(\"a[href*='/vp/products/']\"))}")
+            print(f"[디버그] 진입 직후 상품 링크 개수: {entry_link_count}")
             page.screenshot(path="debug_full_page.png", full_page=False)
 
             page.mouse.wheel(0, 1000)
@@ -141,7 +145,7 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             for _ in range(25):
                 page.mouse.wheel(0, 1500)
                 page.wait_for_timeout(900)
-                current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+                current_count = len(page.query_selector_all(product_link_selector))
                 if current_count == prev_count:
                     stable_rounds += 1
                     if stable_rounds >= 3:
@@ -149,13 +153,14 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                 else:
                     stable_rounds = 0
                 prev_count = current_count
-            print(f"[디버그] 스크롤 완료 후 상품 링크 개수: {len(page.query_selector_all(\"a[href*='/vp/products/']\"))}")
+            final_link_count = len(page.query_selector_all(product_link_selector))
+            print(f"[디버그] 스크롤 완료 후 상품 링크 개수: {final_link_count}")
 
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
             )
             if not cards:
-                links = page.query_selector_all("a[href*='/vp/products/']")
+                links = page.query_selector_all(product_link_selector)
                 cards = []
                 for link in links:
                     try:
