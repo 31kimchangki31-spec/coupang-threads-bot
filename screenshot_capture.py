@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Playwright를 사용하여 골드박스 페이지에서 대상 상품 카드를 찾고 스크린샷을 캡처하는 모듈.
-(outerHTML 기반 ID 매칭, 대괄호 태그 제거, 충분한 페이지 스크롤 적용)
+(Akamai/Cloudflare 봇 차단 강하게 우회 + outerHTML ID 매칭 지원)
 """
 import re
 import time
@@ -39,12 +39,45 @@ def _deep_extract_ids(candidate_tuple: tuple) -> list:
     return ids
 
 
+def apply_stealth_scripts(page):
+    """쿠팡 Akamai 봇 감지 우회를 위한 스텔스 스크립트 주입"""
+    page.add_init_script("""
+        // 1. webdriver 속성 숨기기
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+        // 2. chrome 객체 가상화
+        window.chrome = {
+            runtime: {},
+            loadTimes: function() {},
+            csi: function() {},
+            app: {}
+        };
+
+        // 3. plugins / mimeTypes 가상화
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['ko-KR', 'ko', 'en-US', 'en']
+        });
+
+        // 4. Permissions API 우회
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+        );
+    """)
+
+
 def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
     """
     ready_candidates: [(price, name, candidate_dict), ...]
     골드박스 페이지에 접속하여 정확한 상품 카드를 찾아 스크린샷을 저장한다.
     """
-    goldbox_url = "https://www.coupang.com/np/goldbox"
+    target_goldbox_url = "https://pages.coupang.com/p/121237?sourceType=oms_goldbox"
+    main_url = "https://www.coupang.com/"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -54,6 +87,8 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-infobars",
+                "--disable-dev-shm-usage",
+                "--disable-browser-react-native-networking",
                 "--window-size=1280,1024",
             ],
         )
@@ -68,33 +103,37 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             locale="ko-KR",
             timezone_id="Asia/Seoul",
             extra_http_headers={
-                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
                 "Sec-Ch-Ua-Mobile": "?0",
                 "Sec-Ch-Ua-Platform": '"Windows"',
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-Site": "same-origin",
                 "Sec-Fetch-User": "?1",
                 "Upgrade-Insecure-Requests": "1",
             },
         )
 
         page = context.new_page()
+        apply_stealth_scripts(page)
 
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
-
-        print(f"[스크린샷] 골드박스 페이지 접속 시도: {goldbox_url}")
+        # Step 1: 쿠팡 메인 접속으로 세션 쿠키 수집
+        print(f"[스크린샷] 세션 확보용 쿠팡 메인 접속: {main_url}")
         try:
-            page.goto(goldbox_url, wait_until="domcontentloaded", timeout=30000)
+            page.goto(main_url, wait_until="domcontentloaded", timeout=20000)
+            time.sleep(2)
+        except Exception as e:
+            print(f"[스크린샷] 메인 접속 경고 (계속 진행): {e}")
+
+        # Step 2: 골드박스 이벤트 페이지 직접 접속
+        print(f"[스크린샷] 골드박스 페이지 접속 시도: {target_goldbox_url}")
+        try:
+            page.goto(target_goldbox_url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(3)
         except Exception as e:
-            print(f"[스크린샷] 페이지 접속 실패: {e}")
+            print(f"[스크린샷] 골드박스 접속 실패: {e}")
             browser.close()
             return None, None, None
 
@@ -102,11 +141,19 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         print(f"[디버그] 최종 URL: {page.url}")
 
         if "Access Denied" in page.title():
-            print("[에러] 쿠팡 봇 차단에 걸렸습니다.")
-            browser.close()
-            return None, None, None
+            print("[에러] 여전히 Access Denied 발생 - 재시도 수행")
+            # 2초 대기 후 새로고침 시도
+            time.sleep(2)
+            page.reload(wait_until="domcontentloaded")
+            time.sleep(3)
+            print(f"[디버그] 재시도 후 제목: {page.title()}")
 
-        # 하단 상품까지 완전히 로딩되도록 충분히 스크롤 (12회)
+            if "Access Denied" in page.title():
+                print("[에러] 봇 차단 우회 실패.")
+                browser.close()
+                return None, None, None
+
+        # 가상 스크롤 로딩
         for _ in range(12):
             page.mouse.wheel(0, 1000)
             time.sleep(0.4)
@@ -137,7 +184,6 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         for card in card_elements:
             try:
                 text = card.inner_text() or ""
-                # outerHTML을 통해 <a href="..."> 태그 자체의 속성값까지 확보
                 outer_html = card.evaluate("el => el.outerHTML") or ""
                 if not text and not outer_html:
                     continue
@@ -150,7 +196,6 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             target_ids = _deep_extract_ids((price, name, candidate))
             keywords = _clean_keywords(name)
 
-            # [로켓프레시] 등이 제거된 후의 순수 브랜드 키워드
             brand_keyword = keywords[0] if keywords else ""
             price_num_str = str(int(price)) if price else ""
             price_formatted = f"{int(price):,}" if price else ""
@@ -163,7 +208,7 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             for card, text, outer_html in cards_data:
                 is_matched = False
 
-                # 1. 고유 ID 일치 (outerHTML 검색으로 href 내 itemId/productId 완벽 탐지)
+                # 1. 고유 ID 일치 (outerHTML 검사)
                 if target_ids:
                     for tid in target_ids:
                         if tid in outer_html:
