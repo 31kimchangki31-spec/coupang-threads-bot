@@ -60,36 +60,26 @@ def _parse_card_text(text: str, fallback_name: str):
     return full_name, discount_rate
 
 
-def _extract_product_id(candidate_obj) -> str:
-    """candidate 객체(dict 또는 str)의 모든 텍스트를 탐색하여 Product ID(숫자) 추출"""
-    targets = []
-    if isinstance(candidate_obj, dict):
-        for v in candidate_obj.values():
-            if isinstance(v, str):
-                targets.append(v)
-    elif isinstance(candidate_obj, str):
-        targets.append(candidate_obj)
-
-    for target in targets:
-        m = re.search(r"/products/(\d+)", target) or re.search(r"productId=(\d+)", target)
-        if m:
-            return m.group(1)
-    return ""
+def _extract_product_id(*args) -> str:
+    """인자로 전달된 모든 객체를 문자열로 변환하여 Product ID(숫자) 100% 추출"""
+    text = " ".join(str(a) for a in args if a is not None)
+    m = re.search(r"/products/(\d+)", text) or re.search(r"productId=(\d+)", text)
+    return m.group(1) if m else ""
 
 
 def _normalize_text(s: str) -> str:
-    """공백, 줄바꿈, 쉼표, 원, 특수문자, 대괄호 태그를 모두 제거한 순수 비교용 문자열 생성"""
+    """공백, 줄바꿈, 쉼표, 특수문자를 제거한 비교용 정규화 텍스트 생성"""
     if not s:
         return ""
-    cleaned = re.sub(r"\[.*?\]", "", str(s))  # [로켓프레시] 태그 제거
-    cleaned = re.sub(r"[\s,\n\r\t원%\[\]\(\)\-\_]", "", cleaned)  # 서식/특수문자 제거
+    cleaned = re.sub(r"\[.*?\]", "", str(s))
+    cleaned = re.sub(r"[\s,\n\r\t원%\[\]\(\)\-\_]", "", cleaned)
     return cleaned.lower()
 
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    골드박스 페이지 접속 후 Product ID 및 정규화된 텍스트 비교로
-    정확히 일치하는 카드를 찾아 스크린샷으로 저장한다.
+    골드박스 페이지 접속 후 Product ID 및 링크 URL 추적 방식으로
+    정확히 일치하는 상품 카드를 찾아 스크린샷으로 저장한다.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -118,10 +108,10 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
 
-            # 1. 페이지 로딩 대기 (5초)
+            # 1. 초기 렌더링을 위해 5초 대기
             page.wait_for_timeout(5000)
 
-            # 2. 리뉴얼 안내 버튼 클릭 처리
+            # 2. 리뉴얼 안내 버튼 클릭
             try:
                 btn = page.locator("text='더욱 새로워진 골드박스 살펴보기'")
                 if btn.is_visible(timeout=2000):
@@ -133,13 +123,13 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
 
-            # 3. 스크롤 내리며 카드 로딩
+            # 3. 스크롤을 내리며 상품 목록 동적 로딩
             prev_count = -1
             stable_rounds = 0
             for _ in range(20):
                 page.mouse.wheel(0, 1200)
                 page.wait_for_timeout(1000)
-                current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+                current_count = len(page.query_selector_all("a[href*='/products/']"))
                 if current_count == prev_count and current_count > 0:
                     stable_rounds += 1
                     if stable_rounds >= 2:
@@ -148,66 +138,65 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                     stable_rounds = 0
                 prev_count = current_count
 
-            cards = page.query_selector_all(
-                "li.baby-product, .instant-n-item, div[class*='ProductItem']"
-            )
-            if not cards:
-                links = page.query_selector_all("a[href*='/vp/products/']")
-                cards = []
-                for link in links:
-                    try:
-                        parent = link.evaluate_handle(
-                            "el => el.closest('li') || el.closest('div')"
-                        ).as_element()
-                        if parent and parent not in cards:
-                            cards.append(parent)
-                    except Exception:
-                        continue
+            # 4. 화면상의 모든 상품 링크 요소 수집
+            product_links = page.query_selector_all("a[href*='/products/'], a[href*='productId']")
+            print(f"[스크린샷] 화면에서 상품 링크 {len(product_links)}개 탐색됨")
 
-            print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
-
-            # 4. 카드 요소 데이터 추출 및 스크롤 렌더링
-            card_items = []
-            for card in cards:
+            # 링크 및 카드 컨테이너 매핑 정보 수집
+            link_items = []
+            for link in product_links:
                 try:
-                    card.scroll_into_view_if_needed()
-                    page.wait_for_timeout(100)
-                    card_items.append((
-                        card,
-                        card.inner_text(),
-                        card.inner_html(),
-                        _normalize_text(card.inner_text())  # 비교용 정규화 텍스트
-                    ))
+                    href = link.get_attribute("href") or ""
+                    # <a> 태그 상위의 전체 카드 블록 탐색
+                    card_element = link.evaluate_handle("""
+                        el => {
+                            let curr = el;
+                            for (let i = 0; i < 6; i++) {
+                                if (!curr.parentElement) break;
+                                curr = curr.parentElement;
+                                if (curr.tagName === 'LI' || (curr.className && typeof curr.className === 'string' && (curr.className.includes('Product') || curr.className.includes('card') || curr.className.includes('item')))) {
+                                    return curr;
+                                }
+                            }
+                            return el.parentElement ? el.parentElement.parentElement : el;
+                        }
+                    """).as_element()
+                    
+                    if card_element:
+                        card_element.scroll_into_view_if_needed()
+                        page.wait_for_timeout(100)
+                        text = card_element.inner_text()
+                        link_items.append((card_element, href, text, _normalize_text(text)))
                 except Exception:
                     continue
 
             # 5. 후보 매칭 수행
             for price, name, candidate in candidates_to_try:
-                product_id = _extract_product_id(candidate)
+                # price, name, candidate 전체에서 Product ID 추적
+                product_id = _extract_product_id(price, name, candidate)
                 
-                # 비교 데이터 정규화
                 norm_price = _normalize_text(int(price))
-                norm_name = _normalize_text(name)[:6]  # 상품명 앞 6글자(공백/태그 제외)
+                norm_name = _normalize_text(name)[:6]
 
                 print(f"[스크린샷] 매칭 시도 -> ID: '{product_id}' / 가격: '{norm_price}' / 키워드: '{norm_name}'")
 
-                for card, text, html, norm_text in card_items:
+                for card, href, text, norm_text in link_items:
                     is_matched = False
 
-                    # [방법 1] Product ID 매칭 (가장 정확)
-                    if product_id and product_id in html:
+                    # [우선순위 1] URL의 Product ID로 100% 매칭
+                    if product_id and product_id in href:
                         is_matched = True
-                        print(f"[스크린샷] ✅ Product ID({product_id}) 매칭 성공")
+                        print(f"[스크린샷] ✅ Product ID({product_id}) 매칭 성공!")
 
-                    # [방법 2] 정규화 텍스트 매칭 (가격 번호 + 상품명 핵심어)
+                    # [우선순위 2] 정규화 텍스트 매칭
                     elif norm_price in norm_text and norm_name in norm_text:
                         is_matched = True
-                        print(f"[스크린샷] ✅ 정규화 텍스트(가격+키워드) 매칭 성공")
+                        print(f"[스크린샷] ✅ 정규화 텍스트 매칭 성공!")
 
-                    # [방법 3] 가격 변동 대비 (상품명 키워드만으로 2차 검증)
+                    # [우선순위 3] 상품명 단독 매칭
                     elif len(norm_name) >= 4 and norm_name in norm_text:
                         is_matched = True
-                        print(f"[스크린샷] ✅ 키워드 단독 매칭 성공")
+                        print(f"[스크린샷] ✅ 키워드 단독 매칭 성공!")
 
                     if is_matched:
                         card.scroll_into_view_if_needed()
