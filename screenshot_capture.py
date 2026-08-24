@@ -72,7 +72,7 @@ def _clean_keywords(name: str) -> list:
     clean = re.sub(r"\[.*?\]", " ", str(name))
     clean = re.sub(r"[^\w\s]", " ", clean)
     words = [w.strip() for w in clean.split() if len(w.strip()) >= 2]
-    return words[:4]
+    return words
 
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
@@ -125,7 +125,7 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                 page.evaluate("window.scrollBy(0, 800)")
                 page.wait_for_timeout(600)
 
-            # 모든 상품 관련 링크 요소 탐색 (/vp/, products, itemId, productId 포함)
+            # 모든 상품 관련 링크 요소 탐색
             product_links = page.query_selector_all(
                 "a[href*='/vp/'], a[href*='products'], a[href*='itemId'], a[href*='productId']"
             )
@@ -133,7 +133,6 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             cards = []
             for link in product_links:
                 try:
-                    # 링크를 포함하는 가장 상위의 카드 컨테이너 엘리먼트 추출
                     card_parent = link.evaluate_handle("""
                         el => {
                             let p = el;
@@ -154,13 +153,11 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                 except Exception:
                     continue
 
-            # Fallback: 개별 카드를 찾지 못한 경우 일반 리스트/디브 탐색
             if not cards:
                 cards = page.query_selector_all("li, div[class*='Product'], div[class*='card'], div[class*='item']")
 
             print(f"[스크린샷] 화면에서 상품 카드 {len(cards)}개 탐색됨")
 
-            # 각 카드의 innerText 및 outerHTML(속성, URL, alt 텍스트 전체) 데이터 수집
             card_items = []
             for card in cards:
                 try:
@@ -174,10 +171,14 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             for price, name, candidate in candidates_to_try:
                 target_ids = _deep_extract_ids((price, name, candidate))
                 keywords = _clean_keywords(name)
+                
+                # 브랜드/핵심 키워드 (첫 번째 키워드, 예: '제주삼다수', '쿠팡베이직', '듀라셀')
+                brand_keyword = keywords[0] if keywords else ""
+                
                 price_num_str = str(int(price))
                 price_formatted = f"{int(price):,}"
 
-                print(f"[스크린샷] 매칭 시도 -> ID 후보군: {target_ids} / 가격: {price_formatted}원 / 키워드: {keywords}")
+                print(f"[스크린샷] 매칭 시도 -> 핵심 브랜드: '{brand_keyword}' / ID 후보군: {target_ids} / 가격: {price_formatted}원 / 전체 키워드: {keywords[:4]}")
 
                 for card, text, html in card_items:
                     is_matched = False
@@ -190,19 +191,18 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                                 print(f"[스크린샷] ✅ 고유 ID({tid}) outerHTML 매칭 성공!")
                                 break
 
-                    # [우선순위 2] 가격 + 핵심 키워드 매칭
-                    if not is_matched and (price_num_str in html or price_formatted in text):
-                        matched_kws = [kw for kw in keywords if kw in html or kw in text]
-                        if len(matched_kws) >= 1:
+                    # [우선순위 2] 브랜드명 필수 포함 + 가격 일치
+                    if not is_matched and brand_keyword and (brand_keyword in html or brand_keyword in text):
+                        if price_num_str in html or price_formatted in text:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 가격({price_formatted}) + 키워드({matched_kws}) 매칭 성공!")
+                            print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 가격({price_formatted}) 매칭 성공!")
 
-                    # [우선순위 3] 주요 키워드 조합 매칭 (2개 이상 일치)
-                    if not is_matched and len(keywords) >= 2:
-                        matched_kws = [kw for kw in keywords if kw in html or kw in text]
-                        if len(matched_kws) >= 2:
+                    # [우선순위 3] 브랜드명 필수 포함 + 서브 키워드 조합 매칭
+                    if not is_matched and brand_keyword and (brand_keyword in html or brand_keyword in text):
+                        sub_kws = [kw for kw in keywords[1:4] if kw in html or kw in text]
+                        if len(sub_kws) >= 1:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 키워드 조합({matched_kws}) 매칭 성공!")
+                            print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 서브키워드({sub_kws}) 매칭 성공!")
 
                     if is_matched:
                         card.scroll_into_view_if_needed()
