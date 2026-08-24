@@ -124,6 +124,12 @@ def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000)
 
+            # 골드박스는 무한 스크롤 방식이라, 한 번만 내리면 상품 몇 개만 로딩된 상태임.
+            # 여러 번 반복 스크롤해서 API가 준 23개 안팎의 상품이 최대한 로딩되게 함.
+            for _ in range(8):
+                page.mouse.wheel(0, 1500)
+                page.wait_for_timeout(700)
+
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
             )
