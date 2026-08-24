@@ -9,7 +9,7 @@ import re
 import math
 from playwright.sync_api import sync_playwright
 
-GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
+GOLDBOX_URL = "https://www.coupang.com/mlp/web/mlp-landing-page?landingId=3712&sourceType=gm_crm_goldbox&subSourceType=gm_crm_gwsrtcut"
 
 # "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
 # "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
