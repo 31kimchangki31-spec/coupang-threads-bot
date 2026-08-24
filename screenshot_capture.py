@@ -61,37 +61,25 @@ def _parse_card_text(text: str, fallback_name: str):
 
 
 def _deep_extract_ids(obj) -> list:
-    """객체 내부 전체를 재귀적으로 뒤져 Product ID / Item ID 형태의 모든 숫자 추출"""
-    extracted = []
+    """candidate 객체 내의 모든 8~12자리 고유 숫자(Product ID, Item ID 등) 교차 추출"""
     text_repr = str(obj)
-    
-    # 1. products/숫자 패턴
-    found_products = re.findall(r"products/(\d+)", text_repr)
-    extracted.extend(found_products)
-    
-    # 2. itemId=숫자 패턴
-    found_items = re.findall(r"itemId=(\d+)", text_repr)
-    extracted.extend(found_items)
-
-    # 3. productId=숫자 패턴
-    found_pids = re.findall(r"productId=(\d+)", text_repr)
-    extracted.extend(found_pids)
-    
-    return list(set(extracted))
+    # URL 및 객체 전체 텍스트에서 8~12자리 숫자 연쇄 추출
+    digits = re.findall(r"\d{8,12}", text_repr)
+    return list(set(digits))
 
 
 def _clean_keywords(name: str) -> list:
-    """상품명에서 태그 제거 후 매칭용 핵심 단어 리스트 추출"""
+    """상품명에서 [태그] 제거 후 검색용 주요 키워드 추출"""
     clean = re.sub(r"\[.*?\]", " ", str(name))
     clean = re.sub(r"[^\w\s]", " ", clean)
     words = [w.strip() for w in clean.split() if len(w.strip()) >= 2]
-    return words[:3]  # 상위 3개 단어 추출
+    return words[:4]
 
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    골드박스 페이지 접속 후 HTML 전체(alt, title, href) 스캔 방식으로
-    상품 카드를 탐색하여 스크린샷 저장
+    골드박스 페이지 접속 후 모든 Product/Item ID 및 outerHTML 스캔 방식으로
+    매칭되는 상품 카드를 찾아 스크린샷 저장.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -121,7 +109,7 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(5000)
 
-            # 리뉴얼 안내 팝업 닫기/클릭
+            # 리뉴얼 배너 클릭 처리
             try:
                 btn = page.locator("text='더욱 새로워진 골드박스 살펴보기'")
                 if btn.is_visible(timeout=2000):
@@ -133,91 +121,90 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
 
-            # 스크롤 동작으로 전체 상품 로딩
-            prev_count = -1
-            stable_rounds = 0
-            for _ in range(20):
-                page.mouse.wheel(0, 1200)
-                page.wait_for_timeout(1000)
-                current_count = len(page.query_selector_all("a[href*='/products/'], a[href*='productId']"))
-                if current_count == prev_count and current_count > 0:
-                    stable_rounds += 1
-                    if stable_rounds >= 2:
-                        break
-                else:
-                    stable_rounds = 0
-                prev_count = current_count
+            # 천천히 스크롤하며 모든 이미지 및 카드 렌더링 유도
+            for _ in range(15):
+                page.mouse.wheel(0, 1000)
+                page.wait_for_timeout(800)
 
-            # 카드 컨테이너 또는 상품 링크 부모 수집
-            cards = page.query_selector_all(
-                "li.baby-product, .instant-n-item, div[class*='ProductItem'], div[class*='card']"
-            )
-            if not cards:
-                links = page.query_selector_all("a[href*='/products/'], a[href*='productId']")
-                cards = []
-                for link in links:
-                    try:
-                        parent = link.evaluate_handle(
-                            "el => el.closest('li') || el.closest('div[class*=\"item\"]') || el.parentElement"
-                        ).as_element()
-                        if parent and parent not in cards:
-                            cards.append(parent)
-                    except Exception:
-                        continue
+            # 최상단으로 복귀 후 탐색
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(1000)
 
-            print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
+            # 리뉴얼된 골드박스 페이지의 모든 상품 카드 요소 수집
+            # <a> 태그 상위의 가장 적합한 상품 영역 컨테이너 탐색
+            cards = page.evaluate_handle("""
+                () => {
+                    const links = Array.from(document.querySelectorAll("a[href*='products'], a[href*='productId'], a[href*='itemId'], div[class*='Product'], div[class*='card']"));
+                    const containers = [];
+                    links.forEach(el => {
+                        let parent = el;
+                        for (let i = 0; i < 5; i++) {
+                            if (!parent.parentElement) break;
+                            parent = parent.parentElement;
+                            if (parent.tagName === 'LI' || (parent.className && typeof parent.className === 'string' && (parent.className.includes('Product') || parent.className.includes('card') || parent.className.includes('item') || parent.className.includes('unit')))) {
+                                if (!containers.includes(parent)) {
+                                    containers.push(parent);
+                                }
+                                break;
+                            }
+                        }
+                    });
+                    return containers.length > 0 ? containers : Array.from(document.querySelectorAll("li, div[class*='item']"));
+                }
+            """).as_element()
 
-            # 각 카드의 inner_text 및 inner_html(alt, title, href 포함) 데이터 준비
+            # ElementHandle 리스트 변환
+            card_elements = page.query_selector_all("li.baby-product, .instant-n-item, div[class*='ProductItem'], div[class*='card'], a[href*='products']")
+            print(f"[스크린샷] 화면에서 카드/링크 {len(card_elements)}개 탐색됨")
+
             card_items = []
-            for card in cards:
+            for card in card_elements:
                 try:
-                    card.scroll_into_view_if_needed()
-                    page.wait_for_timeout(100)
-                    card_items.append((
-                        card,
-                        card.inner_text(),
-                        card.inner_html()
-                    ))
+                    # outerHTML을 가져와서 이미지 alt, href, data 속성까지 전부 스캔 대상에 포함
+                    outer_html = card.evaluate("el => el.outerHTML")
+                    inner_text = card.inner_text()
+                    card_items.append((card, inner_text, outer_html))
                 except Exception:
                     continue
 
             # 후보 매칭 수행
             for price, name, candidate in candidates_to_try:
-                # 1. candidate 객체 내부 전체에서 모든 고유 ID 추적
+                # Candidate 객체 전체에서 Product ID, Item ID, VendorItem ID 모두 추출
                 target_ids = _deep_extract_ids((price, name, candidate))
                 keywords = _clean_keywords(name)
-                price_str = f"{int(price):,}"
+                price_num_str = str(int(price))
+                price_formatted = f"{int(price):,}"
 
-                print(f"[스크린샷] 매칭 시도 -> 탐색된 ID: {target_ids} / 가격: {price_str}원 / 키워드: {keywords}")
+                print(f"[스크린샷] 매칭 시도 -> ID 후보군: {target_ids} / 가격: {price_formatted}원 / 키워드: {keywords}")
 
                 for card, text, html in card_items:
                     is_matched = False
 
-                    # [우선순위 1] HTML 내 Product ID / Item ID 존재 여부
+                    # [우선순위 1] ID 매칭 (Product ID, Item ID, VendorItem ID 중 하나라도 HTML에 존재)
                     if target_ids:
                         for tid in target_ids:
                             if tid in html:
                                 is_matched = True
-                                print(f"[스크린샷] ✅ Product/Item ID({tid}) 매칭 성공")
+                                print(f"[스크린샷] ✅ 고유 ID({tid}) outerHTML 매칭 성공")
                                 break
 
-                    # [우선순위 2] 가격 + 주요 키워드 조합 매칭 (HTML 전체 스캔)
-                    if not is_matched and price_str in text:
-                        matched_words = [kw for kw in keywords if kw in html or kw in text]
-                        if len(matched_words) >= 1:
+                    # [우선순위 2] 가격 + 핵심 키워드 매칭
+                    if not is_matched and (price_num_str in html or price_formatted in text):
+                        matched_kws = [kw for kw in keywords if kw in html or kw in text]
+                        if len(matched_kws) >= 1:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 가격({price_str}) + 키워드({matched_words}) 매칭 성공")
+                            print(f"[스크린샷] ✅ 가격({price_formatted}) + 키워드({matched_kws}) 매칭 성공")
 
-                    # [우선순위 3] 주요 키워드 2개 이상 매칭
+                    # [우선순위 3] 주요 키워드 조합 매칭 (2개 이상 일치)
                     if not is_matched and len(keywords) >= 2:
-                        matched_words = [kw for kw in keywords if kw in html or kw in text]
-                        if len(matched_words) >= 2:
+                        matched_kws = [kw for kw in keywords if kw in html or kw in text]
+                        if len(matched_kws) >= 2:
                             is_matched = True
-                            print(f"[스크린샷] ✅ 키워드 조합({matched_words}) 매칭 성공")
+                            print(f"[스크린샷] ✅ 키워드 조합({matched_kws}) 매칭 성공")
 
                     if is_matched:
                         card.scroll_into_view_if_needed()
-                        page.wait_for_timeout(300)
+                        page.wait_for_timeout(500)
                         card.screenshot(path=output_path)
                         full_name, discount_rate = _parse_card_text(text, name)
                         print(f"[스크린샷] 캡처 완료: {full_name} / 할인율: {discount_rate}")
