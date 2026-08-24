@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Playwright를 사용하여 골드박스 페이지에서 대상 상품 카드를 찾고 스크린샷을 캡처하는 모듈.
-(쿠팡 Access Denied 우회 및 리뉴얼된 이벤트 페이지 DOM 탐색 지원)
+(outerHTML 기반 ID 매칭, 대괄호 태그 제거, 충분한 페이지 스크롤 적용)
 """
 import re
 import time
@@ -10,31 +10,39 @@ from playwright.sync_api import sync_playwright
 
 
 def _clean_keywords(name: str) -> list:
-    """상품명에서 공백 및 특수문자를 제거하고 의미 있는 단어 단위로 추출한다."""
-    cleaned = re.sub(r"[^\w\s]", " ", name)
+    """상품명에서 [로켓프레시] 등 대괄호 태그를 제거하고 실질적 키워드를 추출한다."""
+    cleaned_name = re.sub(r"\[[^\]]+\]", " ", name)
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned_name)
     tokens = [t.strip() for t in cleaned.split() if len(t.strip()) > 1]
     return tokens
 
 
 def _deep_extract_ids(candidate_tuple: tuple) -> list:
-    """상품 정보 및 URL 쿼리스트링에서 고유 ID(itemId, vendorItemId, pageKey)를 추출한다."""
+    """상품 정보 및 URL 쿼리스트링에서 고유 ID(itemId, vendorItemId, pageKey, productId)를 추출한다."""
     price, name, cand = candidate_tuple
     raw_url = cand.get("productUrl", "")
     parsed = urlparse(raw_url)
     params = parse_qs(parsed.query)
 
     ids = []
-    for key in ["itemId", "vendorItemId", "pageKey"]:
+    for key in ["itemId", "vendorItemId", "pageKey", "productId"]:
         val = params.get(key, [None])[0]
         if val:
             ids.append(str(val))
+
+    path_match = re.search(r"/products/(\d+)", parsed.path)
+    if path_match:
+        pid = path_match.group(1)
+        if pid not in ids:
+            ids.append(pid)
+
     return ids
 
 
 def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
     """
     ready_candidates: [(price, name, candidate_dict), ...]
-    골드박스 페이지에 접속하여 브랜드 키워드가 포함된 정확한 상품 카드를 찾아 스크린샷을 저장한다.
+    골드박스 페이지에 접속하여 정확한 상품 카드를 찾아 스크린샷을 저장한다.
     """
     goldbox_url = "https://www.coupang.com/np/goldbox"
 
@@ -94,16 +102,15 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         print(f"[디버그] 최종 URL: {page.url}")
 
         if "Access Denied" in page.title():
-            print("[에러] 여전히 쿠팡 봇 차단에 걸렸습니다.")
+            print("[에러] 쿠팡 봇 차단에 걸렸습니다.")
             browser.close()
             return None, None, None
 
-        # 가상 스크롤 로딩을 통해 동적 엘리먼트 렌더링 유도
-        for _ in range(6):
-            page.mouse.wheel(0, 800)
-            time.sleep(0.5)
+        # 하단 상품까지 완전히 로딩되도록 충분히 스크롤 (12회)
+        for _ in range(12):
+            page.mouse.wheel(0, 1000)
+            time.sleep(0.4)
 
-        # 리뉴얼된 골드박스 및 쿠팡 프로모션 페이지 범용 CSS 선택자
         selectors = [
             "a[href*='/products/']",
             "a[href*='/vp/products/']",
@@ -121,7 +128,6 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         combined_selector = ", ".join(selectors)
         card_elements = page.query_selector_all(combined_selector)
 
-        # 구체적인 태그 탐색 실패 시 렌더링된 모든 링크/아이템을 후보군으로 확보
         if not card_elements:
             card_elements = page.query_selector_all("a, li, div")
 
@@ -130,12 +136,12 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
         cards_data = []
         for card in card_elements:
             try:
-                text = card.inner_text()
-                # 텍스트가 없거나 지나치게 짧은 보일러플레이트 영역 제외
-                if not text or len(text.strip()) < 5:
+                text = card.inner_text() or ""
+                # outerHTML을 통해 <a href="..."> 태그 자체의 속성값까지 확보
+                outer_html = card.evaluate("el => el.outerHTML") or ""
+                if not text and not outer_html:
                     continue
-                html = card.inner_html()
-                cards_data.append((card, text, html))
+                cards_data.append((card, text, outer_html))
             except Exception:
                 continue
 
@@ -144,6 +150,7 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
             target_ids = _deep_extract_ids((price, name, candidate))
             keywords = _clean_keywords(name)
 
+            # [로켓프레시] 등이 제거된 후의 순수 브랜드 키워드
             brand_keyword = keywords[0] if keywords else ""
             price_num_str = str(int(price)) if price else ""
             price_formatted = f"{int(price):,}" if price else ""
@@ -153,24 +160,24 @@ def find_and_capture_first_match(ready_candidates: list, screenshot_path: str):
                 f"ID 후보군: {target_ids} / 가격: {price_formatted}원"
             )
 
-            for card, text, html in cards_data:
+            for card, text, outer_html in cards_data:
                 is_matched = False
 
-                # 1. 고유 ID 일치 (최우선)
+                # 1. 고유 ID 일치 (outerHTML 검색으로 href 내 itemId/productId 완벽 탐지)
                 if target_ids:
                     for tid in target_ids:
-                        if tid in html or tid in text:
+                        if tid in outer_html:
                             is_matched = True
                             print(f"[스크린샷] ✅ 고유 ID({tid}) 매칭 성공!")
                             break
 
-                # 2. 브랜드 필수 키워드 포함 검증
-                if not is_matched and brand_keyword and (brand_keyword in html or brand_keyword in text):
-                    if price_num_str and (price_num_str in html or price_formatted in text):
+                # 2. 브랜드 키워드 필수 검증
+                if not is_matched and brand_keyword and (brand_keyword in outer_html or brand_keyword in text):
+                    if price_num_str and (price_num_str in outer_html or price_formatted in text):
                         is_matched = True
                         print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 가격({price_formatted}) 매칭 성공!")
                     else:
-                        matched_sub_kws = [kw for kw in keywords[1:4] if kw in html or kw in text]
+                        matched_sub_kws = [kw for kw in keywords[1:4] if kw in outer_html or kw in text]
                         if matched_sub_kws:
                             is_matched = True
                             print(f"[스크린샷] ✅ 브랜드('{brand_keyword}') + 서브키워드({matched_sub_kws}) 매칭 성공!")
