@@ -2,39 +2,26 @@
 """
 쿠팡 골드박스 페이지에서 특정 상품 카드를 실제 브라우저로 열어
 화면 그대로 스크린샷으로 캡처하는 모듈.
-이미지에도 정보가 다 담기지만, 게시글 본문 텍스트에도 쓸 수 있게
-카드 텍스트에서 전체 상품명/할인율도 같이 파싱해서 반환한다.
 """
 import re
 import math
 from playwright.sync_api import sync_playwright
 
+GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
-# 예전엔 www.coupang.com/np/goldbox 였으나, 쿠팡이 이 URL을 브랜드 광고 배너 모음
-# 페이지(pages.coupang.com/p/121237)로 리다이렉트시켜버려서 실시간 골드박스 상품
-# 그리드와 완전히 무관해짐. 실제 "골드박스" 아이콘을 눌렀을 때 뜨는 진짜 특가 페이지는
-# 아래 mlp-landing-page URL임 (2026-08 기준 확인됨).
-GOLDBOX_URL = (
-    "https://www.coupang.com/mlp/web/mlp-landing-page"
-    "?landingId=3712&sourceType=gm_crm_goldbox&subSourceType=gm_crm_gwsrtcut"
-)
-
-# "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
-# "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
-# ("99% 판매됨"처럼 다른 글자가 붙은 줄은 제외됨)
 DISCOUNT_WITH_LABEL_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
 BARE_PERCENT_PATTERN = re.compile(r"^(\d+)\s*%$")
-
-# 배지 텍스트(%) 파싱이 상품마다 레이아웃이 달라 실패할 수 있어서,
-# "판매가원 정가원"처럼 가격이 두 개 붙어있으면 직접 할인율을 계산하는 폴백
 TWO_PRICE_PATTERN = re.compile(r"([\d,]+)\s*원[^0-9]{0,10}?([\d,]+)\s*원")
-
-# 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
 SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
+HANGUL_PATTERN = re.compile(r"[가-힣]")
+
+
+def _normalize_text(text: str) -> str:
+    """공백 및 특수문자를 제거하여 비교용 텍스트로 정규화"""
+    return re.sub(r"[^\w\d가-힣]", "", text)
 
 
 def _compute_discount_from_prices(text: str):
-    """'16,500원 27,900원'처럼 가격이 두 개 붙어있으면 할인율을 직접 계산."""
     m = TWO_PRICE_PATTERN.search(text)
     if not m:
         return None
@@ -49,11 +36,7 @@ def _compute_discount_from_prices(text: str):
     return math.floor((original - sale) / original * 100)
 
 
-HANGUL_PATTERN = re.compile(r"[가-힣]")
-
-
 def _parse_card_text(text: str, fallback_name: str):
-    """카드의 전체 텍스트에서 전체 상품명과 할인율(있으면)을 뽑아낸다."""
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     full_name = fallback_name
     discount_rate = None
@@ -64,7 +47,6 @@ def _parse_card_text(text: str, fallback_name: str):
             if m:
                 discount_rate = float(m.group(1))
                 continue
-        # 브랜드 로고 줄(예: "LA BRUKET")은 한글이 없어서 걸러짐 -> 실제 상품명만 남음
         if (
             not SKIP_LINE_PATTERN.search(line)
             and len(line) > 3
@@ -73,7 +55,6 @@ def _parse_card_text(text: str, fallback_name: str):
             full_name = line
             break
 
-    # 배지 텍스트로 못 찾았으면, 가격 두 개로 직접 계산 시도
     if discount_rate is None:
         computed = _compute_discount_from_prices(text)
         if computed is not None:
@@ -84,10 +65,7 @@ def _parse_card_text(text: str, fallback_name: str):
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    골드박스 페이지를 한 번만 열고, candidates_to_try(=[(price, name, candidate_dict), ...])를
-    순서대로 시도해서 처음 매칭되는 걸 스크린샷으로 저장한다.
-    이미 상품마다 브라우저를 새로 여는 것보다 훨씬 빠르고, 실패해도 자동으로 다음 후보로 넘어간다.
-    반환: (matched_candidate: dict|None, full_name: str|None, discount_rate: float|None)
+    candidates_to_try = [(price, name, candidate_dict), ...]
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -113,61 +91,54 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         try:
-            product_link_selector = "a[href*='/vp/products/']"
-
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
-
-            # 페이지 진입 직후 아주 넉넉하게 10초 고정 대기 (요청 반영)
-            page.wait_for_timeout(10000)
-
-            # 그래도 혹시 더 늦게 뜨는 경우를 대비해, 상품 링크가 나타날 때까지
-            # 최대 15초 추가 폴링 (이미 떠 있으면 바로 통과)
-            for _ in range(30):
-                if page.query_selector_all(product_link_selector):
-                    break
-                page.wait_for_timeout(500)
-            # 첫 상품이 뜬 뒤에도 나머지 카드들이 이어서 채워지므로 추가로 잠깐 더 대기
-            page.wait_for_timeout(3000)
-
-            entry_link_count = len(page.query_selector_all(product_link_selector))
+            page.wait_for_timeout(4000)
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
-            print(f"[디버그] 진입 직후 상품 링크 개수: {entry_link_count}")
-            page.screenshot(path="debug_full_page.png", full_page=False)
 
+            # 페이지 스크롤 처리
             page.mouse.wheel(0, 1000)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2000)
 
-            # 카드 개수가 더 이상 안 늘어날 때까지(=거의 다 로딩될 때까지) 반복 스크롤
-            # (상품이 한 번에 안 뜨고 하나씩 채워지는 페이지라 안정 판정을 좀 더 여유있게 잡음)
             prev_count = -1
             stable_rounds = 0
-            for _ in range(25):
+            for _ in range(20):
                 page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(900)
-                current_count = len(page.query_selector_all(product_link_selector))
+                page.wait_for_timeout(700)
+                current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
                 if current_count == prev_count:
                     stable_rounds += 1
-                    if stable_rounds >= 3:
+                    if stable_rounds >= 2:
                         break
                 else:
                     stable_rounds = 0
                 prev_count = current_count
-            final_link_count = len(page.query_selector_all(product_link_selector))
-            print(f"[디버그] 스크롤 완료 후 상품 링크 개수: {final_link_count}")
 
+            # 상품 카드 셀렉터 탐색 개선
             cards = page.query_selector_all(
-                "li.baby-product, .instant-n-item, div[class*='ProductItem']"
+                "li.baby-product, .instant-n-item, div[class*='ProductItem'], [class*='ProductCard']"
             )
-            if not cards:
-                links = page.query_selector_all(product_link_selector)
+            
+            # 특정 셀렉터로 수집이 실패한 경우 fallback 처리
+            if not cards or len(cards) < 5:
+                links = page.query_selector_all("a[href*='/vp/products/']")
                 cards = []
                 for link in links:
                     try:
+                        # 억지로 최상위 div를 잡지 않도록 'li' 또는 특정 클래스를 지닌 컨테이너 위주로 탐색
                         parent = link.evaluate_handle(
-                            "el => el.closest('li') || el.closest('div')"
+                            """el => {
+                                let p = el.parentElement;
+                                while (p && p.tagName !== 'BODY') {
+                                    if (p.tagName === 'LI' || p.className.includes('item') || p.className.includes('card') || p.className.includes('product')) {
+                                        return p;
+                                    }
+                                    p = p.parentElement;
+                                }
+                                return el;
+                            }"""
                         ).as_element()
                         if parent and parent not in cards:
                             cards.append(parent)
@@ -176,20 +147,44 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
             print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
-            # 카드 텍스트를 미리 한 번씩만 읽어서 캐싱 (여러 후보와 반복 비교할 때 효율적)
-            card_texts = []
+            # 카드별 텍스트 및 속성(href) 사전 캐싱
+            card_info_list = []
             for card in cards:
                 try:
-                    card_texts.append((card, card.inner_text()))
+                    text = card.inner_text()
+                    # 카드 내부 링크 UR/상품 ID 추출
+                    link_elem = card.query_selector("a[href*='/vp/products/']")
+                    href = link_elem.get_attribute("href") if link_elem else ""
+                    card_info_list.append((card, text, href))
                 except Exception:
                     continue
 
             for price, name, candidate in candidates_to_try:
                 price_str = f"{int(price):,}"
-                name_fragment = name.strip()[:10]
+                # 특수문자 및 불필요 키워드 제거한 검색용 키워드 생성
+                clean_name = re.sub(r"\[.*?\]|\(.*?\)", "", name).strip()
+                name_fragment = clean_name[:6] if clean_name else name[:6]
+                
+                norm_name_fragment = _normalize_text(name_fragment)
                 print(f"[스크린샷] 매칭 시도: {price_str}원 / '{name_fragment}'")
-                for card, text in card_texts:
-                    if price_str in text and name_fragment in text:
+
+                # URL 내 product_id 파싱 시도 (candidate 내 URL이 있는 경우)
+                target_url = candidate.get("url", "") if isinstance(candidate, dict) else ""
+                target_pid = ""
+                if "/vp/products/" in target_url:
+                    match_pid = re.search(r"/products/(\d+)", target_url)
+                    if match_pid:
+                        target_pid = match_pid.group(1)
+
+                for card, text, href in card_info_list:
+                    norm_text = _normalize_text(text)
+                    
+                    # 1순위: URL 상품 ID 기반 매칭
+                    pid_matched = target_pid and target_pid in href
+                    # 2순위: 가격 + 상품명 키워드 매칭
+                    text_matched = (price_str in text) and (norm_name_fragment in norm_text)
+
+                    if pid_matched or text_matched:
                         card.screenshot(path=output_path)
                         full_name, discount_rate = _parse_card_text(text, name)
                         print(f"[스크린샷] 매칭 성공: {full_name} / 할인율: {discount_rate}")
@@ -206,7 +201,6 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
 
 def capture_goldbox_card_screenshot(target_price: int, target_name: str, output_path: str):
-    """(구버전 호환용) 단일 후보만 시도하는 래퍼."""
     matched, full_name, discount_rate = find_and_capture_first_match(
         [(target_price, target_name, None)], output_path
     )
