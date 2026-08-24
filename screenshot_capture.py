@@ -115,9 +115,21 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000)
-            for _ in range(8):
+
+            # 카드 개수가 더 이상 안 늘어날 때까지(=거의 다 로딩될 때까지) 반복 스크롤
+            prev_count = -1
+            stable_rounds = 0
+            for _ in range(20):
                 page.mouse.wheel(0, 1500)
                 page.wait_for_timeout(700)
+                current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+                if current_count == prev_count:
+                    stable_rounds += 1
+                    if stable_rounds >= 2:
+                        break
+                else:
+                    stable_rounds = 0
+                prev_count = current_count
 
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
