@@ -2,8 +2,6 @@
 """
 쿠팡 골드박스 페이지에서 특정 상품 카드를 실제 브라우저로 열어
 화면 그대로 스크린샷으로 캡처하는 모듈.
-이미지에도 정보가 다 담기지만, 게시글 본문 텍스트에도 쓸 수 있게
-카드 텍스트에서 전체 상품명/할인율도 같이 파싱해서 반환한다.
 """
 import re
 import math
@@ -11,18 +9,11 @@ from playwright.sync_api import sync_playwright
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
-# "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
-# "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
-# ("99% 판매됨"처럼 다른 글자가 붙은 줄은 제외됨)
 DISCOUNT_WITH_LABEL_PATTERN = re.compile(r"(\d+)\s*%\s*할인")
 BARE_PERCENT_PATTERN = re.compile(r"^(\d+)\s*%$")
-
-# 배지 텍스트(%) 파싱이 상품마다 레이아웃이 달라 실패할 수 있어서,
-# "판매가원 정가원"처럼 가격이 두 개 붙어있으면 직접 할인율을 계산하는 폴백
 TWO_PRICE_PATTERN = re.compile(r"([\d,]+)\s*원[^0-9]{0,10}?([\d,]+)\s*원")
-
-# 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
 SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
+HANGUL_PATTERN = re.compile(r"[가-힣]")
 
 
 def _compute_discount_from_prices(text: str):
@@ -41,9 +32,6 @@ def _compute_discount_from_prices(text: str):
     return math.floor((original - sale) / original * 100)
 
 
-HANGUL_PATTERN = re.compile(r"[가-힣]")
-
-
 def _parse_card_text(text: str, fallback_name: str):
     """카드의 전체 텍스트에서 전체 상품명과 할인율(있으면)을 뽑아낸다."""
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -56,7 +44,6 @@ def _parse_card_text(text: str, fallback_name: str):
             if m:
                 discount_rate = float(m.group(1))
                 continue
-        # 브랜드 로고 줄(예: "LA BRUKET")은 한글이 없어서 걸러짐 -> 실제 상품명만 남음
         if (
             not SKIP_LINE_PATTERN.search(line)
             and len(line) > 3
@@ -65,7 +52,6 @@ def _parse_card_text(text: str, fallback_name: str):
             full_name = line
             break
 
-    # 배지 텍스트로 못 찾았으면, 가격 두 개로 직접 계산 시도
     if discount_rate is None:
         computed = _compute_discount_from_prices(text)
         if computed is not None:
@@ -74,10 +60,22 @@ def _parse_card_text(text: str, fallback_name: str):
     return full_name, discount_rate
 
 
+def _clean_name_for_matching(name: str) -> str:
+    """'[로켓프레시]' 등 대괄호 태그 제거 후 순수 상품명에서 키워드 추출"""
+    clean = re.sub(r"\[.*?\]", "", name).strip()
+    return clean[:8]
+
+
+def _extract_product_id(url: str) -> str:
+    """URL에서 /products/123456 형태의 고유 ID 추출"""
+    m = re.search(r"/products/(\d+)", url) if url else None
+    return m.group(1) if m else ""
+
+
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     """
-    골드박스 페이지를 한 번만 열고, candidates_to_try(=[(price, name, candidate_dict), ...])를
-    순서대로 시도해서 처음 매칭되는 걸 스크린샷으로 저장한다.
+    골드박스 페이지를 접속 후 5초 대기하며, Product ID 및 태그 정제 키워드로
+    매칭되는 상품 카드를 찾아 스크린샷으로 저장한다.
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -106,10 +104,10 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
 
-            # 1. 요청사항: 접속 후 상품 로딩을 위해 5초 대기
+            # 1. 접속 후 상품 렌더링을 위해 5초 대기
             page.wait_for_timeout(5000)
 
-            # 2. 리뉴얼 안내 버튼이 화면에 보이면 클릭하여 바로 목록 진입 시도
+            # 2. 리뉴얼 안내 버튼이 있을 경우 클릭
             try:
                 btn = page.locator("text='더욱 새로워진 골드박스 살펴보기'")
                 if btn.is_visible(timeout=2000):
@@ -121,12 +119,12 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
 
-            # 3. 아래로 여유 있게 스크롤하여 상품 카드 렌더링 유도
+            # 3. 반복 스크롤하여 상품 로딩
             prev_count = -1
             stable_rounds = 0
             for _ in range(20):
                 page.mouse.wheel(0, 1200)
-                page.wait_for_timeout(1000)  # 스크롤 간격을 1초로 늘려 안정성 확보
+                page.wait_for_timeout(1000)
                 current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
                 if current_count == prev_count and current_count > 0:
                     stable_rounds += 1
@@ -136,7 +134,6 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
                     stable_rounds = 0
                 prev_count = current_count
 
-            # 카드 요소 수집
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
             )
@@ -155,32 +152,49 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
             print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
-            # 4. 각 카드를 뷰포트로 스크롤하며 텍스트 추출 (IntersectionObserver 지연 로딩 방지)
-            card_texts = []
+            # 4. 각 카드로 스크롤 이동 후 텍스트/HTML 추출 (지연 로딩 방지)
+            card_items = []
             for card in cards:
                 try:
                     card.scroll_into_view_if_needed()
-                    page.wait_for_timeout(150)  # 텍스트가 렌더링될 때까지 미세 대기
-                    text = card.inner_text()
-                    if text:
-                        card_texts.append((card, text))
+                    page.wait_for_timeout(100)
+                    card_items.append((
+                        card,
+                        card.inner_text(),
+                        card.inner_html()
+                    ))
                 except Exception:
                     continue
 
-            # 5. 매칭 및 스크린샷 캡처
+            # 5. 후보 매칭 수행
             for price, name, candidate in candidates_to_try:
+                candidate_url = candidate.get("정리된 URL") or candidate.get("url") or ""
+                product_id = _extract_product_id(candidate_url)
+                
                 price_str = f"{int(price):,}"
-                name_fragment = name.strip()[:10]
-                print(f"[스크린샷] 매칭 시도: {price_str}원 / '{name_fragment}'")
-                for card, text in card_texts:
-                    if price_str in text and name_fragment in text:
-                        # 캡처 직전 카드가 완전히 화면 중앙에 오도록 스크롤 후 캡처
+                clean_name_fragment = _clean_name_for_matching(name)
+
+                print(f"[스크린샷] 매칭 시도 -> ID: {product_id} / 가격: {price_str}원 / 키워드: '{clean_name_fragment}'")
+
+                for card, text, html in card_items:
+                    is_matched = False
+
+                    # [우선순위 1] URL의 Product ID로 매칭
+                    if product_id and product_id in html:
+                        is_matched = True
+                        print(f"[스크린샷] ✅ Product ID({product_id}) 매칭 성공")
+
+                    # [우선순위 2] 가격 + [로켓프레시] 제거된 키워드로 매칭
+                    elif price_str in text and clean_name_fragment in text:
+                        is_matched = True
+                        print(f"[스크린샷] ✅ 텍스트(가격+키워드) 매칭 성공")
+
+                    if is_matched:
                         card.scroll_into_view_if_needed()
                         page.wait_for_timeout(300)
                         card.screenshot(path=output_path)
-                        
                         full_name, discount_rate = _parse_card_text(text, name)
-                        print(f"[스크린샷] 매칭 성공: {full_name} / 할인율: {discount_rate}")
+                        print(f"[스크린샷] 캡처 완료: {full_name} / 할인율: {discount_rate}")
                         return candidate, full_name, discount_rate
 
             print("[스크린샷] 시도한 후보 중 화면과 일치하는 카드를 하나도 찾지 못함")
