@@ -9,7 +9,15 @@ import re
 import math
 from playwright.sync_api import sync_playwright
 
-GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
+
+# 예전엔 www.coupang.com/np/goldbox 였으나, 쿠팡이 이 URL을 브랜드 광고 배너 모음
+# 페이지(pages.coupang.com/p/121237)로 리다이렉트시켜버려서 실시간 골드박스 상품
+# 그리드와 완전히 무관해짐. 실제 "골드박스" 아이콘을 눌렀을 때 뜨는 진짜 특가 페이지는
+# 아래 mlp-landing-page URL임 (2026-08 기준 확인됨).
+GOLDBOX_URL = (
+    "https://www.coupang.com/mlp/web/mlp-landing-page"
+    "?landingId=3712&sourceType=gm_crm_goldbox&subSourceType=gm_crm_gwsrtcut"
+)
 
 # "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
 # "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
@@ -107,29 +115,41 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
-            page.wait_for_timeout(4000)
+
+            # 상품명이 한 번에 뜨는 게 아니라 페이지 진입 후 몇 초에 걸쳐
+            # 하나씩 채워지는 페이지라서, 고정 대기 대신 실제로 상품 링크가
+            # 나타날 때까지 최대 15초간 폴링한다.
+            for _ in range(30):
+                if page.query_selector_all("a[href*='/vp/products/']"):
+                    break
+                page.wait_for_timeout(500)
+            # 첫 상품이 뜬 뒤에도 나머지 카드들이 이어서 채워지므로 추가로 잠깐 더 대기
+            page.wait_for_timeout(3000)
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
+            print(f"[디버그] 진입 직후 상품 링크 개수: {len(page.query_selector_all(\"a[href*='/vp/products/']\"))}")
             page.screenshot(path="debug_full_page.png", full_page=False)
 
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(3000)
 
             # 카드 개수가 더 이상 안 늘어날 때까지(=거의 다 로딩될 때까지) 반복 스크롤
+            # (상품이 한 번에 안 뜨고 하나씩 채워지는 페이지라 안정 판정을 좀 더 여유있게 잡음)
             prev_count = -1
             stable_rounds = 0
-            for _ in range(20):
+            for _ in range(25):
                 page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(700)
+                page.wait_for_timeout(900)
                 current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
                 if current_count == prev_count:
                     stable_rounds += 1
-                    if stable_rounds >= 2:
+                    if stable_rounds >= 3:
                         break
                 else:
                     stable_rounds = 0
                 prev_count = current_count
+            print(f"[디버그] 스크롤 완료 후 상품 링크 개수: {len(page.query_selector_all(\"a[href*='/vp/products/']\"))}")
 
             cards = page.query_selector_all(
                 "li.baby-product, .instant-n-item, div[class*='ProductItem']"
