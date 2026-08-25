@@ -109,19 +109,20 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(5000)
 
-            page.mouse.wheel(0, 1000)
+            page.mouse.wheel(0, 800)
             page.wait_for_timeout(3000)
 
-            # 카드 개수가 더 이상 안 늘어날 때까지(=거의 다 로딩될 때까지) 반복 스크롤
+            # 카드가 어느정도(5개 이상) 로딩된 뒤, 개수가 더 안 늘어날 때까지 반복 스크롤.
+            # (초반엔 0개인 게 정상이라, 0개인 상태에서 "안정됐다"고 착각해 일찍 멈추는 걸 방지)
             prev_count = -1
             stable_rounds = 0
-            for _ in range(20):
-                page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(700)
+            for _ in range(25):
+                page.mouse.wheel(0, 900)
+                page.wait_for_timeout(1500)
                 current_count = len(page.query_selector_all("a[href*='/vp/products/']"))
-                if current_count == prev_count:
+                if current_count >= 5 and current_count == prev_count:
                     stable_rounds += 1
-                    if stable_rounds >= 2:
+                    if stable_rounds >= 3:
                         break
                 else:
                     stable_rounds = 0
