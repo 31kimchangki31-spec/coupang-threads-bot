@@ -7,6 +7,7 @@
 """
 import re
 import math
+from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
@@ -72,6 +73,137 @@ def _parse_card_text(text: str, fallback_name: str):
             discount_rate = float(computed)
 
     return full_name, discount_rate
+
+
+PRICE_SINGLE_PATTERN = re.compile(r"([\d,]+)\s*원")
+
+
+def _extract_price(text: str):
+    """카드 텍스트에서 판매가를 뽑아낸다. 정가/판매가 두 개가 있으면 더 작은 쪽(판매가)을 쓴다."""
+    m2 = TWO_PRICE_PATTERN.search(text)
+    if m2:
+        try:
+            a = int(m2.group(1).replace(",", ""))
+            b = int(m2.group(2).replace(",", ""))
+            return min(a, b)
+        except ValueError:
+            pass
+    m1 = PRICE_SINGLE_PATTERN.search(text)
+    if m1:
+        try:
+            return int(m1.group(1).replace(",", ""))
+        except ValueError:
+            pass
+    return None
+
+
+def extract_product_key(href: str):
+    """상품 URL에서 itemId:vendorItemId 형태의 고유 키를 뽑는다 (중복 게시 판단용)."""
+    if not href:
+        return None
+    parsed = urlparse(href)
+    params = parse_qs(parsed.query)
+    item_id = params.get("itemId", [None])[0]
+    vendor_item_id = params.get("vendorItemId", [None])[0]
+    if item_id or vendor_item_id:
+        return f"{item_id}:{vendor_item_id}"
+    return None
+
+
+def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket: bool = True, max_check: int = 40):
+    """
+    골드박스 페이지 맨 위(=잘 팔리는 순)부터 순서대로 상품 카드를 살펴보다가,
+    아직 게시 안 한(posted_keys에 없는) 로켓배송 상품을 처음 만나면 그 카드를 스크린샷으로 저장한다.
+    API의 골드박스 목록 대신, 실제로 화면에 보이는 걸 그대로 신뢰하는 방식.
+    반환: (raw_href, full_name, price, discount_rate) 또는 못 찾으면 None
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            channel="chromium",
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+            ],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1920, "height": 1080},
+            device_scale_factor=2,
+            locale="ko-KR",
+            timezone_id="Asia/Seoul",
+        )
+        page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        try:
+            print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
+            page.goto(GOLDBOX_URL, timeout=60000)
+            page.wait_for_timeout(5000)
+
+            # 상위 상품(=잘 팔리는 상품)을 쓰는 방식이라, 많이 내릴 필요 없음.
+            # 배너 영역만 살짝 지나칠 정도로만 스크롤.
+            page.mouse.wheel(0, 500)
+            page.wait_for_timeout(2500)
+
+            print(f"[디버그] 페이지 제목: {page.title()}")
+            print(f"[디버그] 최종 URL: {page.url}")
+            page.screenshot(path="debug_full_page.png", full_page=False)
+
+            links = page.query_selector_all("a[href*='/vp/products/']")
+            print(f"[스크린샷] 화면 상단에서 상품 링크 {len(links)}개 발견")
+
+            checked = 0
+            for link in links:
+                if checked >= max_check:
+                    break
+                try:
+                    href = link.get_attribute("href")
+                    if not href:
+                        continue
+                    if not href.startswith("http"):
+                        href = "https://www.coupang.com" + href
+
+                    key = extract_product_key(href)
+                    if key is None or key in posted_keys:
+                        continue
+
+                    card = link.evaluate_handle(
+                        "el => el.closest('li') || el.closest('div')"
+                    ).as_element()
+                    if not card:
+                        continue
+
+                    text = card.inner_text()
+                    if require_rocket and "로켓" not in text:
+                        continue
+
+                    checked += 1
+
+                    full_name, discount_rate = _parse_card_text(text, "")
+                    price = _extract_price(text)
+                    if not full_name or price is None:
+                        continue
+
+                    card.screenshot(path=output_path)
+                    print(f"[스크린샷] 선택된 상품: {full_name} / {price:,}원 / 할인율 {discount_rate}")
+                    return href, full_name, price, discount_rate
+
+                except Exception:
+                    continue
+
+            print("[스크린샷] 조건에 맞는(미게시+로켓배송) 상품을 화면에서 찾지 못함")
+            return None
+
+        except Exception as e:
+            print(f"[스크린샷] 실패: {e}")
+            return None
+        finally:
+            browser.close()
 
 
 def find_and_capture_first_match(candidates_to_try: list, output_path: str):
