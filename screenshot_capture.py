@@ -109,6 +109,18 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(4000)
 
+            # 쿠팡이 골드박스 페이지를 리뉴얼하면서, 바로 상품이 안 뜨고
+            # "골드박스 페이지가 리뉴얼되었습니다" 안내 화면이 먼저 뜨는 경우가 있음.
+            # 이 경우 버튼을 눌러야 실제 상품 목록으로 넘어감.
+            try:
+                renew_button = page.get_by_text("골드박스 살펴보기")
+                if renew_button.count() > 0:
+                    print("[스크린샷] 리뉴얼 안내 화면 감지 -> 버튼 클릭해서 실제 상품 목록으로 이동")
+                    renew_button.first.click()
+                    page.wait_for_timeout(4000)
+            except Exception as e:
+                print(f"[스크린샷] 리뉴얼 버튼 처리 중 예외(무시하고 계속 진행): {e}")
+
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
             page.screenshot(path="debug_full_page.png", full_page=False)
