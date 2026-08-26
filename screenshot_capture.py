@@ -98,7 +98,7 @@ def _extract_price(text: str):
 
 
 def extract_product_key(href: str):
-    """상품 URL에서 itemId:vendorItemId 형태의 고유 키를 뽑는다 (중복 게시 판단용)."""
+    """상품 URL에서 고유 키를 뽑는다 (중복 게시 판단용). itemId/vendorItemId가 없으면 경로의 상품ID로 대체."""
     if not href:
         return None
     parsed = urlparse(href)
@@ -107,6 +107,13 @@ def extract_product_key(href: str):
     vendor_item_id = params.get("vendorItemId", [None])[0]
     if item_id or vendor_item_id:
         return f"{item_id}:{vendor_item_id}"
+
+    # itemId/vendorItemId가 URL에 없는 경우(클릭 시 JS로 붙는 경우 등) -> 경로의 상품ID로 대체
+    path_parts = parsed.path.strip("/").split("/")
+    if "products" in path_parts:
+        idx = path_parts.index("products")
+        if idx + 1 < len(path_parts):
+            return f"pid:{path_parts[idx + 1]}"
     return None
 
 
@@ -145,10 +152,15 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             page.goto(GOLDBOX_URL, timeout=60000)
             page.wait_for_timeout(5000)
 
-            # 상위 상품(=잘 팔리는 상품)을 쓰는 방식이라, 많이 내릴 필요 없음.
-            # 배너 영역만 살짝 지나칠 정도로만 스크롤.
-            page.mouse.wheel(0, 500)
-            page.wait_for_timeout(2500)
+            # 상위 상품(=잘 팔리는 상품)을 쓰는 방식이라, 많이 내릴 필요는 없지만
+            # 리뉴얼 배너가 꽤 길어서(위 스크린샷 기준) 한 번만 내리면 부족함.
+            # 상품 링크가 최소 20개 정도 잡힐 때까지 조금씩 반복 스크롤.
+            for _ in range(6):
+                page.mouse.wheel(0, 700)
+                page.wait_for_timeout(1500)
+                link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+                if link_count >= 20:
+                    break
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
