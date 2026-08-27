@@ -181,6 +181,23 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                 pass
             page.wait_for_timeout(6000)
 
+            # "골드박스 페이지가 리뉴얼되었습니다" 안내 화면이 먼저 뜨는 경우가 있어서,
+            # "더욱 새로워진 골드박스 살펴보기" 버튼을 찾아서 눌러야 실제 상품 목록으로 넘어감.
+            try:
+                renew_button = page.get_by_text("새로워진 골드박스 살펴보기")
+                count = renew_button.count()
+                print(f"[스크린샷] 리뉴얼 버튼 탐색 결과: {count}개")
+                if count > 0:
+                    renew_button.first.click()
+                    print("[스크린샷] 리뉴얼 버튼 클릭 완료, 페이지 이동 대기")
+                    page.wait_for_timeout(5000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[스크린샷] 리뉴얼 버튼 처리 중 예외(무시): {e}")
+
             # mouse.wheel이 안 먹힐 수 있어서, JS로 직접 window를 스크롤 (더 확실함)
             for _ in range(15):
                 page.evaluate("window.scrollBy(0, 800)")
@@ -201,11 +218,10 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
 
             link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
             if link_count < 10:
-                # 그래도 여전히 부족하면, 헤드리스가 감지되어 축소된 페이지를 받았을 가능성이 큼.
-                # 페이지 본문(body) 텍스트 일부를 로그로 남겨서 실제 어떤 내용인지 확인 가능하게 함.
+                # 그래도 여전히 부족하면, 실제 어떤 내용인지 로그로 남김
                 try:
-                    body_text = page.locator("body").inner_text()[:500]
-                    print(f"[디버그] body 텍스트 일부(500자): {body_text}")
+                    body_text = page.locator("body").inner_text()[:800]
+                    print(f"[디버그] body 텍스트 일부(800자): {body_text}")
                 except Exception:
                     pass
 
