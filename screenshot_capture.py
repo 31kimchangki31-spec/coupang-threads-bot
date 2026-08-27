@@ -180,22 +180,22 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                 pass
             page.wait_for_timeout(6000)
 
-            # 상위 상품(=잘 팔리는 상품)을 쓰는 방식이라, 많이 내릴 필요는 없지만
-            # 리뉴얼 배너가 꽤 길어서(위 스크린샷 기준) 한 번만 내리면 부족함.
-            # 상품 링크가 최소 20개 정도 잡힐 때까지 조금씩 반복 스크롤.
-            for _ in range(12):
-                page.mouse.wheel(0, 700)
+            # mouse.wheel이 안 먹힐 수 있어서, JS로 직접 window를 스크롤 (더 확실함)
+            for _ in range(15):
+                page.evaluate("window.scrollBy(0, 800)")
                 page.wait_for_timeout(1800)
                 link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
                 if link_count >= 20:
                     break
 
-            # 그래도 너무 적으면(로딩이 느렸던 경우), 한 번 더 넉넉히 대기 후 재확인
             link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
             if link_count < 10:
                 print(f"[스크린샷] 링크 {link_count}개뿐, 추가 대기 후 재확인")
                 page.wait_for_timeout(5000)
-                page.mouse.wheel(0, 700)
+                page.evaluate("window.scrollBy(0, 1500)")
+                page.wait_for_timeout(3000)
+                # 그래도 안 되면 페이지 맨 아래까지 강제로 스크롤 시도
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(3000)
 
             print(f"[디버그] 페이지 제목: {page.title()}")
