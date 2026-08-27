@@ -31,4 +31,16 @@ def generate_caption(product_name: str, price: int, deeplink: str, discount_rate
 
     discount_line = _discount_line(discount_rate)
     price_str = f"{money_emoji} {int(price):,}원" if price else ""
-    return f"{product_name}\n{discount_line}{price_str}\n\n{link_emoji} {deeplink}"
+    footer = f"{discount_line}{price_str}\n\n{link_emoji} {deeplink}"
+    caption = f"{product_name.strip()}\n{footer}"
+
+    # Threads 본문 길이를 넘지 않도록 상품명만 안전하게 줄인다.
+    max_length = 500
+    if len(caption) <= max_length:
+        return caption
+
+    available = max_length - len(footer) - 2
+    if available <= 0:
+        raise ValueError("링크와 가격 정보만으로도 Threads 본문 길이를 초과합니다.")
+    shortened_name = product_name.strip()[:available].rstrip() + "…"
+    return f"{shortened_name}\n{footer}"

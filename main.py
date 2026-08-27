@@ -7,8 +7,9 @@ Coupang(골드박스) -> Threads 자동 게시 (화면에서 직접 상품 고�
    (쿠팡파트너스 API의 골드박스 목록 조회는 더 이상 안 씀 - 화면과 API 목록이 서로 달라서
    매칭이 계속 실패했기 때문에, 화면에 실제로 보이는 걸 그대로 신뢰하는 방식으로 변경)
 2. 그 상품의 URL을 정리해서 파트너스 딥링크 생성 (API는 이 변환에만 사용)
-3. 이미 찍어둔 스크린샷을 imgbb에 업로드해서 공개 URL 확보
-4. 상품명+가격+링크로 캡션 작성 후, 이미지와 함께 쓰레드에 게시
+3. 상품목록 카드의 데이터를 1번 예시 형태의 홍보 카드 이미지로 재구성
+4. 생성한 이미지를 imgbb에 업로드해서 공개 URL 확보
+5. 상품명+가격+링크로 캡션 작성 후, 이미지와 함께 쓰레드에 게시
 """
 import os
 import sys
@@ -21,6 +22,7 @@ from caption_generator import generate_caption
 from threads_api import post_to_threads
 from screenshot_capture import pick_top_unposted_product, extract_product_key
 from image_host import upload_image_get_url
+from product_card_renderer import render_product_card
 
 POSTED_FILE = "posted.json"
 SCREENSHOT_PATH = "goldbox_item.png"
@@ -88,6 +90,17 @@ def normalize_product_url(raw_url: str) -> str:
 
 
 def main():
+    required_env = [
+        "COUPANG_ACCESS_KEY",
+        "COUPANG_SECRET_KEY",
+        "THREADS_USER_ID",
+        "THREADS_ACCESS_TOKEN",
+        "IMGBB_API_KEY",
+    ]
+    missing = [name for name in required_env if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"필수 환경변수가 없습니다: {', '.join(missing)}")
+
     coupang_access_key = os.environ["COUPANG_ACCESS_KEY"]
     coupang_secret_key = os.environ["COUPANG_SECRET_KEY"]
     threads_user_id = os.environ["THREADS_USER_ID"]
@@ -102,7 +115,10 @@ def main():
         print("게시할 새 상품을 화면에서 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
-    raw_href, product_name, price, discount_rate = picked
+    raw_href = picked["href"]
+    product_name = picked["name"]
+    price = picked["price"]
+    discount_rate = picked.get("discount_rate")
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
 
     # 2. 딥링크 생성 (API는 이 변환에만 사용)
@@ -110,22 +126,24 @@ def main():
     try:
         deeplink_result = create_deeplink([clean_url], coupang_access_key, coupang_secret_key)
         deeplink = deeplink_result[0]["shortenUrl"]
-    except RuntimeError as e:
-        print(f"딥링크 변환 실패 - 이번 회차는 게시하지 않고 스킵합니다: {e}")
-        sys.exit(0)
+    except Exception as e:
+        raise RuntimeError(f"딥링크 변환 실패: {e}") from e
     print(f"딥링크: {deeplink}")
 
-    # 3. imgbb 업로드
-    if not imgbb_api_key:
-        print("IMGBB_API_KEY가 설정되지 않아 이미지를 올릴 수 없습니다 - 스킵합니다.")
-        sys.exit(0)
+    # 3. 2번 상품목록 카드의 데이터를 1번 형태의 홍보 카드로 재구성
+    try:
+        render_product_card(picked, SCREENSHOT_PATH)
+        print(f"[홍보 이미지] 카드 생성 완료: {SCREENSHOT_PATH}")
+    except Exception as e:
+        raise RuntimeError(f"홍보 이미지 생성 실패: {e}") from e
+
+    # 4. imgbb 업로드
     try:
         image_url = upload_image_get_url(SCREENSHOT_PATH, imgbb_api_key)
     except Exception as e:
-        print(f"이미지 업로드 실패 - 이번 회차는 게시하지 않고 스킵합니다: {e}")
-        sys.exit(0)
+        raise RuntimeError(f"이미지 업로드 실패: {e}") from e
 
-    # 4. 캡션 생성 및 게시
+    # 5. 캡션 생성 및 게시
     caption = generate_caption(product_name, price, deeplink, discount_rate=discount_rate)
     print(f"게시 문구:\n{caption}")
 
@@ -135,7 +153,7 @@ def main():
     )
     print(f"게시 완료. media_id={media_id}")
 
-    # 5. 기록 저장
+    # 6. Threads 게시 성공 후에만 중복 방지 기록 저장
     key = extract_product_key(raw_href)
     if key:
         posted.add(key)

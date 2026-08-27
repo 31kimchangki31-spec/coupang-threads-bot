@@ -40,7 +40,14 @@ def create_deeplink(product_urls, access_key: str, secret_key: str) -> list:
     }
     body = {"coupangUrls": product_urls}
 
-    resp = requests.post(DOMAIN + path, headers=headers, data=json.dumps(body))
+    resp = requests.post(
+        DOMAIN + path,
+        headers=headers,
+        json=body,
+        timeout=30,
+    )
+    if not resp.ok:
+        print(f"[쿠팡 딥링크 실패] status={resp.status_code} body={resp.text[:1000]}")
     resp.raise_for_status()
     result = resp.json()
 
