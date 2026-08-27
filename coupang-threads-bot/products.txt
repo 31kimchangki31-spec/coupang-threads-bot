@@ -1,5 +1,0 @@
-# 한 줄에 하나씩 "상품명 | 쿠팡 상품 URL" 형식으로 추가하세요.
-# 자동화가 위에서부터 순서대로 하나씩 골라 게시하고, 사용한 항목은 posted.json에 기록됩니다.
-접이식 실리콘 빨래바구니 | https://www.coupang.com/vp/products/0000000001
-무선 미니 선풍기 | https://www.coupang.com/vp/products/0000000002
-차량용 핸드폰 거치대 | https://www.coupang.com/vp/products/0000000003
