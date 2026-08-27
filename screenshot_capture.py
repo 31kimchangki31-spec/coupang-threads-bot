@@ -153,6 +153,7 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             headless=True,
             channel="chromium",
             args=[
+                "--headless=new",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
@@ -197,6 +198,16 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                 # 그래도 안 되면 페이지 맨 아래까지 강제로 스크롤 시도
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(3000)
+
+            link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+            if link_count < 10:
+                # 그래도 여전히 부족하면, 헤드리스가 감지되어 축소된 페이지를 받았을 가능성이 큼.
+                # 페이지 본문(body) 텍스트 일부를 로그로 남겨서 실제 어떤 내용인지 확인 가능하게 함.
+                try:
+                    body_text = page.locator("body").inner_text()[:500]
+                    print(f"[디버그] body 텍스트 일부(500자): {body_text}")
+                except Exception:
+                    pass
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
