@@ -174,17 +174,29 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
         try:
             print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
             page.goto(GOLDBOX_URL, timeout=60000)
-            page.wait_for_timeout(5000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(6000)
 
             # 상위 상품(=잘 팔리는 상품)을 쓰는 방식이라, 많이 내릴 필요는 없지만
             # 리뉴얼 배너가 꽤 길어서(위 스크린샷 기준) 한 번만 내리면 부족함.
             # 상품 링크가 최소 20개 정도 잡힐 때까지 조금씩 반복 스크롤.
-            for _ in range(6):
+            for _ in range(12):
                 page.mouse.wheel(0, 700)
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1800)
                 link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
                 if link_count >= 20:
                     break
+
+            # 그래도 너무 적으면(로딩이 느렸던 경우), 한 번 더 넉넉히 대기 후 재확인
+            link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+            if link_count < 10:
+                print(f"[스크린샷] 링크 {link_count}개뿐, 추가 대기 후 재확인")
+                page.wait_for_timeout(5000)
+                page.mouse.wheel(0, 700)
+                page.wait_for_timeout(3000)
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
