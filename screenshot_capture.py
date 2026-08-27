@@ -117,6 +117,30 @@ def extract_product_key(href: str):
     return None
 
 
+def _find_card_container(link):
+    """
+    링크의 바로 위 부모만으로는 가격/상품명/배지가 다 안 담길 수 있어서,
+    "원"(가격 표시)이 포함된 충분히 큰 컨테이너가 나올 때까지 부모를 타고 올라간다.
+    반환: (card_element, text) 또는 못 찾으면 (None, "")
+    """
+    el = link
+    for _ in range(6):
+        try:
+            parent = el.evaluate_handle("node => node.parentElement").as_element()
+        except Exception:
+            break
+        if not parent:
+            break
+        try:
+            text = parent.inner_text()
+        except Exception:
+            text = ""
+        if "원" in text and len(text) > 15:
+            return parent, text
+        el = parent
+    return None, ""
+
+
 def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket: bool = True, max_check: int = 40):
     """
     골드박스 페이지 맨 위(=잘 팔리는 순)부터 순서대로 상품 카드를 살펴보다가,
@@ -170,7 +194,10 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             print(f"[스크린샷] 화면 상단에서 상품 링크 {len(links)}개 발견")
 
             checked = 0
-            for link in links:
+            skipped_dup = 0
+            skipped_no_rocket = 0
+            skipped_no_data = 0
+            for idx, link in enumerate(links):
                 if checked >= max_check:
                     break
                 try:
@@ -182,16 +209,17 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
 
                     key = extract_product_key(href)
                     if key is None or key in posted_keys:
+                        skipped_dup += 1
                         continue
 
-                    card = link.evaluate_handle(
-                        "el => el.closest('li') || el.closest('div')"
-                    ).as_element()
-                    if not card:
+                    card, text = _find_card_container(link)
+                    if card is None:
+                        print(f"[스크린샷] #{idx} 카드 컨테이너를 못 찾음 (건너뜀)")
+                        skipped_no_data += 1
                         continue
 
-                    text = card.inner_text()
                     if require_rocket and "로켓" not in text:
+                        skipped_no_rocket += 1
                         continue
 
                     checked += 1
@@ -199,16 +227,25 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                     full_name, discount_rate = _parse_card_text(text, "")
                     price = _extract_price(text)
                     if not full_name or price is None:
+                        print(
+                            f"[스크린샷] #{idx} 이름/가격 추출 실패 "
+                            f"(이름={full_name!r}, 가격={price}) -> 건너뜀"
+                        )
+                        skipped_no_data += 1
                         continue
 
                     card.screenshot(path=output_path)
                     print(f"[스크린샷] 선택된 상품: {full_name} / {price:,}원 / 할인율 {discount_rate}")
                     return href, full_name, price, discount_rate
 
-                except Exception:
+                except Exception as e:
+                    print(f"[스크린샷] #{idx} 처리 중 예외(건너뜀): {e}")
                     continue
 
-            print("[스크린샷] 조건에 맞는(미게시+로켓배송) 상품을 화면에서 찾지 못함")
+            print(
+                f"[스크린샷] 조건에 맞는 상품을 화면에서 찾지 못함 "
+                f"(중복스킵={skipped_dup}, 로켓아님={skipped_no_rocket}, 데이터부족={skipped_no_data})"
+            )
             return None
 
         except Exception as e:
