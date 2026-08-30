@@ -7,7 +7,7 @@ import re
 import math
 from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
@@ -162,8 +162,8 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             locale="ko-KR",
             timezone_id="Asia/Seoul",
         )
+        Stealth().apply_stealth_sync(context)  # playwright-stealth 2.x: context 단위로 적용
         page = context.new_page()
-        stealth_sync(page)  # playwright-stealth: 훨씬 폭넓은 봇탐지 신호를 한번에 위장
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         # 헤드리스 탭이 "숨겨진 탭"으로 보고돼서 visibility 기반 지연로딩이 안 되는 걸 방지
         page.add_init_script("""
