@@ -1,14 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Coupang(골드박스) -> Threads 자동 게시 (화면에서 직접 상품 고르는 방식)
-
-흐름:
-1. 골드박스 페이지 위쪽(=잘 팔리는 순)부터 살펴보며, 아직 안 올린 로켓배송 상품을 하나 고름
-   (쿠팡파트너스 API의 골드박스 목록 조회는 더 이상 안 씀 - 화면과 API 목록이 서로 달라서
-   매칭이 계속 실패했기 때문에, 화면에 실제로 보이는 걸 그대로 신뢰하는 방식으로 변경)
-2. 그 상품의 URL을 정리해서 파트너스 딥링크 생성 (API는 이 변환에만 사용)
-3. 이미 찍어둔 스크린샷을 imgbb에 업로드해서 공개 URL 확보
-4. 상품명+가격+링크로 캡션 작성 후, 이미지와 함께 쓰레드에 게시
 """
 import os
 import sys
@@ -29,15 +21,10 @@ KST = timezone(timedelta(hours=9))
 
 
 def today_label() -> str:
-    """골드박스가 매일 오전 7시(KST)에 갱신되므로, 그날그날 구분용 날짜 라벨."""
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
 def load_posted() -> set:
-    """
-    게시 기록을 불러온다. 저장된 날짜가 오늘과 다르면(=골드박스가 갱신된 새 날이면)
-    자동으로 빈 목록으로 새로 시작해서, 오늘 하루 안에서만 중복을 막는다.
-    """
     if os.path.exists(POSTED_FILE):
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -53,17 +40,12 @@ def save_posted(posted_urls: set):
 
 
 def normalize_product_url(raw_url: str) -> str:
-    """
-    화면에서 뽑은 상품 링크에는 제휴 태그/추적값이 붙어있을 수 있어서,
-    itemId/vendorItemId/pageKey만 뽑아 순수 상품 URL로 재조립한다.
-    """
     parsed = urlparse(raw_url)
     params = parse_qs(parsed.query)
 
     item_id = params.get("itemId", [None])[0]
     vendor_item_id = params.get("vendorItemId", [None])[0]
 
-    # /vp/products/{productId} 형태에서 productId 추출
     path_parts = parsed.path.strip("/").split("/")
     product_id = None
     if "products" in path_parts:
@@ -96,7 +78,6 @@ def main():
 
     posted = load_posted()
 
-    # 1. 화면 위(잘 팔리는 순)부터 살펴서 아직 안 올린 로켓배송 상품 선택
     picked = pick_top_unposted_product(posted, SCREENSHOT_PATH, require_rocket=True)
     if picked is None:
         print("게시할 새 상품을 화면에서 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
@@ -105,7 +86,6 @@ def main():
     raw_href, product_name, price, discount_rate = picked
     print(f"선택된 상품: {product_name} ({int(price):,}원)")
 
-    # 2. 딥링크 생성 (API는 이 변환에만 사용)
     clean_url = normalize_product_url(raw_href)
     try:
         deeplink_result = create_deeplink([clean_url], coupang_access_key, coupang_secret_key)
@@ -115,7 +95,6 @@ def main():
         sys.exit(0)
     print(f"딥링크: {deeplink}")
 
-    # 3. imgbb 업로드
     if not imgbb_api_key:
         print("IMGBB_API_KEY가 설정되지 않아 이미지를 올릴 수 없습니다 - 스킵합니다.")
         sys.exit(0)
@@ -125,7 +104,6 @@ def main():
         print(f"이미지 업로드 실패 - 이번 회차는 게시하지 않고 스킵합니다: {e}")
         sys.exit(0)
 
-    # 4. 캡션 생성 및 게시
     caption = generate_caption(product_name, price, deeplink, discount_rate=discount_rate)
     print(f"게시 문구:\n{caption}")
 
@@ -135,7 +113,6 @@ def main():
     )
     print(f"게시 완료. media_id={media_id}")
 
-    # 5. 기록 저장
     key = extract_product_key(raw_href)
     if key:
         posted.add(key)
