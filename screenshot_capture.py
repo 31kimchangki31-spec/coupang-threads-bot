@@ -90,37 +90,46 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         try:
-            print(f"[스크린샷] 골드박스 페이지 접속 시도: {GOLDBOX_URL}")
-            page.goto(GOLDBOX_URL, timeout=60000)
-            page.wait_for_timeout(5000)
+            cards = []
+            for attempt in range(1, 4):
+                print(f"[스크린샷] 골드박스 페이지 접속 시도 ({attempt}/3): {GOLDBOX_URL}")
+                if attempt == 1:
+                    page.goto(GOLDBOX_URL, timeout=60000)
+                else:
+                    page.reload(timeout=60000)
+                page.wait_for_timeout(5000)
 
-            page.mouse.wheel(0, 1000)
-            page.wait_for_timeout(3000)
+                page.mouse.wheel(0, 1000)
+                page.wait_for_timeout(3000)
 
-            # 예전에 안정적으로 통했던 단순 반복 스크롤 (8회, 1500px)
-            for _ in range(8):
-                page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(800)
+                for _ in range(8):
+                    page.mouse.wheel(0, 1500)
+                    page.wait_for_timeout(800)
+
+                cards = page.query_selector_all(
+                    "li.baby-product, .instant-n-item, div[class*='ProductItem']"
+                )
+                if not cards:
+                    links = page.query_selector_all("a[href*='/vp/products/']")
+                    cards = []
+                    for link in links:
+                        try:
+                            parent = link.evaluate_handle(
+                                "el => el.closest('li') || el.closest('div')"
+                            ).as_element()
+                            if parent and parent not in cards:
+                                cards.append(parent)
+                        except Exception:
+                            continue
+
+                print(f"[스크린샷] 시도 {attempt}회차: 카드 {len(cards)}개 탐색됨")
+                if len(cards) >= 10:
+                    break
+                print(f"[스크린샷] 카드가 너무 적음({len(cards)}개), 새로고침 후 재시도")
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
             page.screenshot(path="debug_full_page.png", full_page=False)
-
-            cards = page.query_selector_all(
-                "li.baby-product, .instant-n-item, div[class*='ProductItem']"
-            )
-            if not cards:
-                links = page.query_selector_all("a[href*='/vp/products/']")
-                cards = []
-                for link in links:
-                    try:
-                        parent = link.evaluate_handle(
-                            "el => el.closest('li') || el.closest('div')"
-                        ).as_element()
-                        if parent and parent not in cards:
-                            cards.append(parent)
-                    except Exception:
-                        continue
 
             print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
