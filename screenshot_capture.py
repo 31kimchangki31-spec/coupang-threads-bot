@@ -199,15 +199,23 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             except Exception as e:
                 print(f"[스크린샷] 리뉴얼 버튼 처리 중 예외(무시): {e}")
 
+            def _count_links_all_frames():
+                total = 0
+                for frame in page.frames:
+                    try:
+                        total += len(frame.query_selector_all("a[href*='/vp/products/']"))
+                    except Exception:
+                        continue
+                return total
+
             # mouse.wheel이 안 먹힐 수 있어서, JS로 직접 window를 스크롤 (더 확실함)
             for _ in range(15):
                 page.evaluate("window.scrollBy(0, 800)")
                 page.wait_for_timeout(1800)
-                link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
-                if link_count >= 20:
+                if _count_links_all_frames() >= 20:
                     break
 
-            link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+            link_count = _count_links_all_frames()
             if link_count < 10:
                 print(f"[스크린샷] 링크 {link_count}개뿐, 추가 대기 후 재확인")
                 page.wait_for_timeout(5000)
@@ -216,7 +224,7 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(3000)
 
-            link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
+            link_count = _count_links_all_frames()
             if link_count < 10:
                 try:
                     body_text = page.locator("body").inner_text()[:800]
@@ -226,10 +234,22 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
 
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
+            print(f"[디버그] 프레임 개수: {len(page.frames)}")
             page.screenshot(path="debug_full_page.png", full_page=False)
 
-            links = page.query_selector_all("a[href*='/vp/products/']")
-            print(f"[스크린샷] 화면 상단에서 상품 링크 {len(links)}개 발견")
+            # 상품 목록이 iframe(페이지 안의 또 다른 페이지) 안에 들어있을 수 있어서,
+            # 메인 페이지뿐 아니라 모든 프레임을 다 뒤진다.
+            all_links = []
+            for frame in page.frames:
+                try:
+                    frame_links = frame.query_selector_all("a[href*='/vp/products/']")
+                    for l in frame_links:
+                        all_links.append(l)
+                except Exception:
+                    continue
+
+            links = all_links
+            print(f"[스크린샷] 전체 프레임에서 상품 링크 {len(links)}개 발견")
 
             checked = 0
             skipped_dup = 0
