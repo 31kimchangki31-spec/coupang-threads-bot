@@ -7,14 +7,10 @@
 """
 import re
 import math
-import os
-from urllib.parse import urlparse, parse_qs, urljoin
+from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 
-GOLDBOX_URL = (
-    os.environ.get("GOLDBOX_URL")
-    or "https://www.coupang.com/np/goldbox"
-)
+GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
 
 # "몇 % 판매됨"(판매 진행률)과 "몇 % 할인"(진짜 할인율)을 구분하기 위해
 # "할인"이라는 단어가 붙어있거나, 혹은 그 줄에 숫자%만 단독으로 있는 경우만 할인율로 인정
@@ -25,7 +21,6 @@ BARE_PERCENT_PATTERN = re.compile(r"^(\d+)\s*%$")
 # 배지 텍스트(%) 파싱이 상품마다 레이아웃이 달라 실패할 수 있어서,
 # "판매가원 정가원"처럼 가격이 두 개 붙어있으면 직접 할인율을 계산하는 폴백
 TWO_PRICE_PATTERN = re.compile(r"([\d,]+)\s*원[^0-9]{0,10}?([\d,]+)\s*원")
-REMAINING_TIME_PATTERN = re.compile(r"(\d{1,3}:\d{2}:\d{2})\s*남음")
 
 # 이름이 아닌 정보성 줄(가격/배송/판매율 등)은 상품명 후보에서 제외
 SKIP_LINE_PATTERN = re.compile(r"원|%|로켓|남음|배송|판매|쿠폰|무료")
@@ -102,24 +97,6 @@ def _extract_price(text: str):
     return None
 
 
-def _extract_original_price(text: str):
-    """두 가격이 있으면 큰 금액을 정가로 반환한다."""
-    m2 = TWO_PRICE_PATTERN.search(text)
-    if not m2:
-        return None
-    try:
-        a = int(m2.group(1).replace(",", ""))
-        b = int(m2.group(2).replace(",", ""))
-        return max(a, b)
-    except ValueError:
-        return None
-
-
-def _extract_remaining_time(text: str):
-    match = REMAINING_TIME_PATTERN.search(text)
-    return match.group(1) if match else None
-
-
 def extract_product_key(href: str):
     """상품 URL에서 고유 키를 뽑는다 (중복 게시 판단용). itemId/vendorItemId가 없으면 경로의 상품ID로 대체."""
     if not href:
@@ -146,94 +123,22 @@ def _find_card_container(link):
     "원"(가격 표시)이 포함된 충분히 큰 컨테이너가 나올 때까지 부모를 타고 올라간다.
     반환: (card_element, text) 또는 못 찾으면 (None, "")
     """
-    try:
-        parent = link.evaluate_handle(
-            """node => {
-                let el = node;
-                for (let i = 0; i < 10 && el; i += 1, el = el.parentElement) {
-                    const text = el.innerText || "";
-                    const hasImage = Boolean(el.querySelector("img"));
-                    const hasPrice = /[0-9,]+\\s*원/.test(text);
-                    if (hasImage && hasPrice && text.length > 15 && text.length < 2500) {
-                        return el;
-                    }
-                }
-                return null;
-            }"""
-        ).as_element()
-    except Exception:
-        return None, ""
-
-    if not parent:
-        return None, ""
-    try:
-        return parent, parent.inner_text()
-    except Exception:
-        return parent, ""
-
-
-def _find_product_image(card):
-    """카드 안에서 배지보다 큰 실제 상품 이미지를 선택한다."""
-    best = None
-    best_score = 0
-    try:
-        image_count = card.locator("img").count()
-    except Exception:
-        return None, None
-
-    for index in range(image_count):
-        image = card.locator("img").nth(index)
+    el = link
+    for _ in range(6):
         try:
-            info = image.evaluate(
-                """img => ({
-                    src: img.currentSrc || img.src || img.getAttribute("data-src") || "",
-                    width: img.naturalWidth || img.width || 0,
-                    height: img.naturalHeight || img.height || 0
-                })"""
-            )
-            src = info.get("src") or ""
-            score = int(info.get("width") or 0) * int(info.get("height") or 0)
-            if score == 0:
-                try:
-                    box = image.bounding_box()
-                    if box:
-                        score = int(box["width"]) * int(box["height"])
-                except Exception:
-                    pass
-            if src and not src.startswith("data:") and score > best_score:
-                best = image
-                best_score = score
+            parent = el.evaluate_handle("node => node.parentElement").as_element()
         except Exception:
-            continue
-
-    if best is None:
-        return None, None
-    try:
-        return best, best.get_attribute("src") or best.get_attribute("data-src")
-    except Exception:
-        return best, None
-
-
-def _browser_launch_options():
-    options = {
-        "headless": True,
-        "channel": "chromium",
-        "args": [
-            "--headless=new",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            "--no-sandbox",
-        ],
-    }
-    proxy = (
-        os.environ.get("BROWSER_PROXY")
-        or os.environ.get("COUPANG_PROXY")
-        or os.environ.get("HTTPS_PROXY")
-        or os.environ.get("HTTP_PROXY")
-    )
-    if proxy:
-        options["proxy"] = {"server": proxy}
-    return options
+            break
+        if not parent:
+            break
+        try:
+            text = parent.inner_text()
+        except Exception:
+            text = ""
+        if "원" in text and len(text) > 15:
+            return parent, text
+        el = parent
+    return None, ""
 
 
 def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket: bool = True, max_check: int = 40):
@@ -241,12 +146,19 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
     골드박스 페이지 맨 위(=잘 팔리는 순)부터 순서대로 상품 카드를 살펴보다가,
     아직 게시 안 한(posted_keys에 없는) 로켓배송 상품을 처음 만나면 그 카드를 스크린샷으로 저장한다.
     API의 골드박스 목록 대신, 실제로 화면에 보이는 걸 그대로 신뢰하는 방식.
-    반환: 상품 정보 dict 또는 못 찾으면 None.
-    이미지 자체는 product_image_path에 저장하고, 최종 홍보 카드 생성은
-    product_card_renderer.py가 담당한다.
+    반환: (raw_href, full_name, price, discount_rate) 또는 못 찾으면 None
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(**_browser_launch_options())
+        browser = p.chromium.launch(
+            headless=True,
+            channel="chromium",
+            args=[
+                "--headless=new",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+            ],
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -286,22 +198,6 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             except Exception as e:
                 print(f"[스크린샷] 리뉴얼 버튼 처리 중 예외(무시): {e}")
 
-            # 일부 환경에서는 첫 진입이 행사 랜딩 페이지로 이동한다.
-            # 실제 상품 링크가 없을 때 상단의 골드박스 메뉴를 한 번 눌러 재진입한다.
-            initial_links = len(page.query_selector_all("a[href*='/vp/products/']"))
-            if initial_links < 5 and "pages.coupang.com" in page.url:
-                try:
-                    menu = page.locator("a:has-text('골드박스')")
-                    if menu.count() > 0:
-                        menu.first.click(timeout=5000)
-                        page.wait_for_timeout(5000)
-                        try:
-                            page.wait_for_load_state("networkidle", timeout=15000)
-                        except Exception:
-                            pass
-                except Exception as e:
-                    print(f"[스크린샷] 골드박스 메뉴 재진입 실패(무시): {e}")
-
             # mouse.wheel이 안 먹힐 수 있어서, JS로 직접 window를 스크롤 (더 확실함)
             for _ in range(15):
                 page.evaluate("window.scrollBy(0, 800)")
@@ -311,7 +207,7 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                     break
 
             link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
-            if link_count < 5:
+            if link_count < 10:
                 print(f"[스크린샷] 링크 {link_count}개뿐, 추가 대기 후 재확인")
                 page.wait_for_timeout(5000)
                 page.evaluate("window.scrollBy(0, 1500)")
@@ -321,7 +217,7 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                 page.wait_for_timeout(3000)
 
             link_count = len(page.query_selector_all("a[href*='/vp/products/']"))
-            if link_count < 5:
+            if link_count < 10:
                 # 그래도 여전히 부족하면, 실제 어떤 내용인지 로그로 남김
                 try:
                     body_text = page.locator("body").inner_text()[:800]
@@ -332,16 +228,9 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             print(f"[디버그] 페이지 제목: {page.title()}")
             print(f"[디버그] 최종 URL: {page.url}")
             page.screenshot(path="debug_full_page.png", full_page=False)
-            with open("debug_page.html", "w", encoding="utf-8") as debug_file:
-                debug_file.write(page.content())
 
             links = page.query_selector_all("a[href*='/vp/products/']")
             print(f"[스크린샷] 화면 상단에서 상품 링크 {len(links)}개 발견")
-            if len(links) < 5:
-                raise RuntimeError(
-                    "실제 골드박스 상품목록을 받지 못했습니다. "
-                    f"final_url={page.url}, product_links={len(links)}"
-                )
 
             checked = 0
             skipped_dup = 0
@@ -374,12 +263,7 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
 
                     checked += 1
 
-                    fallback_name = (
-                        link.get_attribute("title")
-                        or link.get_attribute("aria-label")
-                        or ""
-                    )
-                    full_name, discount_rate = _parse_card_text(text, fallback_name)
+                    full_name, discount_rate = _parse_card_text(text, "")
                     price = _extract_price(text)
                     if not full_name or price is None:
                         print(
@@ -389,35 +273,9 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
                         skipped_no_data += 1
                         continue
 
-                    image_element, image_url = _find_product_image(card)
-                    if image_element is None:
-                        print(f"[스크린샷] #{idx} 상품 이미지 추출 실패 (건너뜀)")
-                        skipped_no_data += 1
-                        continue
-
-                    source_dir = os.path.dirname(output_path) or "."
-                    source_image_path = os.path.join(source_dir, "product_source.png")
-                    source_card_path = os.path.join(source_dir, "source_card.png")
-                    image_element.screenshot(path=source_image_path)
-                    card.screenshot(path=source_card_path)
-
-                    original_price = _extract_original_price(text)
-                    remaining_time = _extract_remaining_time(text)
-                    print(
-                        f"[스크린샷] 선택된 상품: {full_name} / {price:,}원 / "
-                        f"할인율 {discount_rate} / 남은 시간 {remaining_time}"
-                    )
-                    return {
-                        "href": href,
-                        "name": full_name,
-                        "price": price,
-                        "original_price": original_price,
-                        "discount_rate": discount_rate,
-                        "remaining_time": remaining_time,
-                        "image_url": urljoin(page.url, image_url) if image_url else None,
-                        "product_image_path": source_image_path,
-                        "source_card_path": source_card_path,
-                    }
+                    card.screenshot(path=output_path)
+                    print(f"[스크린샷] 선택된 상품: {full_name} / {price:,}원 / 할인율 {discount_rate}")
+                    return href, full_name, price, discount_rate
 
                 except Exception as e:
                     print(f"[스크린샷] #{idx} 처리 중 예외(건너뜀): {e}")
@@ -429,8 +287,6 @@ def pick_top_unposted_product(posted_keys: set, output_path: str, require_rocket
             )
             return None
 
-        except RuntimeError:
-            raise
         except Exception as e:
             print(f"[스크린샷] 실패: {e}")
             return None
@@ -446,7 +302,15 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
     반환: (matched_candidate: dict|None, full_name: str|None, discount_rate: float|None)
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(**_browser_launch_options())
+        browser = p.chromium.launch(
+            headless=True,
+            channel="chromium",
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+            ],
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

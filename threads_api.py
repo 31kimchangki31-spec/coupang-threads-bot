@@ -8,7 +8,6 @@ import time
 import requests
 
 BASE_URL = "https://graph.threads.net/v1.0"
-REQUEST_TIMEOUT = 30
 
 
 def post_to_threads(user_id: str, access_token: str, text: str, image_url: str = None, topic_tag: str = None) -> str:
@@ -32,65 +31,25 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
     if topic_tag:
         params["topic_tag"] = topic_tag
 
-    resp = requests.post(create_url, params=params, timeout=REQUEST_TIMEOUT)
+    resp = requests.post(create_url, params=params)
     if not resp.ok:
         print(f"[Threads 컨테이너 생성 실패] status={resp.status_code} body={resp.text}")
     resp.raise_for_status()
     creation_id = resp.json()["id"]
 
-    # 이미지 컨테이너는 고정 5초보다 처리 시간이 길어질 수 있으므로 상태를 확인한다.
-    wait_for_container(creation_id, access_token)
+    # 컨테이너가 서버에서 처리될 시간을 잠깐 대기 (메타 권장)
+    time.sleep(5)
 
     # 2. 발행
     publish_url = f"{BASE_URL}/{user_id}/threads_publish"
     publish_resp = requests.post(
         publish_url,
         params={"creation_id": creation_id, "access_token": access_token},
-        timeout=REQUEST_TIMEOUT,
     )
     if not publish_resp.ok:
         print(f"[Threads 발행 실패] status={publish_resp.status_code} body={publish_resp.text}")
     publish_resp.raise_for_status()
     return publish_resp.json()["id"]
-
-
-def wait_for_container(
-    creation_id: str,
-    access_token: str,
-    max_wait_seconds: int = 90,
-    interval_seconds: int = 3,
-) -> None:
-    """미디어 컨테이너가 FINISHED 상태가 될 때까지 기다린다."""
-    status_url = f"{BASE_URL}/{creation_id}"
-    deadline = time.monotonic() + max_wait_seconds
-
-    while time.monotonic() < deadline:
-        resp = requests.get(
-            status_url,
-            params={
-                "fields": "status,error_message",
-                "access_token": access_token,
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
-        if not resp.ok:
-            print(f"[Threads 컨테이너 상태 조회 실패] status={resp.status_code} body={resp.text}")
-        resp.raise_for_status()
-
-        result = resp.json()
-        status = result.get("status")
-        if status == "FINISHED":
-            return
-        if status in {"ERROR", "EXPIRED"}:
-            message = result.get("error_message") or "컨테이너 처리 실패"
-            raise RuntimeError(f"Threads 컨테이너 상태={status}: {message}")
-
-        print(f"[Threads 컨테이너] status={status}, {interval_seconds}초 후 재확인")
-        time.sleep(interval_seconds)
-
-    raise TimeoutError(
-        f"Threads 컨테이너가 {max_wait_seconds}초 안에 FINISHED 상태가 되지 않았습니다."
-    )
 
 
 def refresh_long_lived_token(access_token: str, app_secret: str = None) -> dict:
@@ -102,9 +61,6 @@ def refresh_long_lived_token(access_token: str, app_secret: str = None) -> dict:
         "grant_type": "th_refresh_token",
         "access_token": access_token,
     }
-    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    resp = requests.get(url, params=params)
     resp.raise_for_status()
-    result = resp.json()
-    if not result.get("access_token"):
-        raise RuntimeError(f"Threads 토큰 갱신 응답에 access_token이 없습니다: {result}")
-    return result  # {"access_token": "...", "expires_in": 5184000}
+    return resp.json()  # {"access_token": "...", "expires_in": 5184000}
