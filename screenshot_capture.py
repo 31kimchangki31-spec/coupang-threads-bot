@@ -124,21 +124,32 @@ def find_and_capture_first_match(candidates_to_try: list, output_path: str):
 
             print(f"[스크린샷] 화면에서 카드 {len(cards)}개 탐색됨")
 
+            # 매칭이 왜 실패하는지 원인 파악용 디버그: 텍스트 읽기 성공/실패 집계 + 샘플 출력
+            readable_texts = []
+            read_errors = 0
+            for card in cards:
+                try:
+                    t = card.inner_text()
+                    readable_texts.append(t)
+                except Exception:
+                    read_errors += 1
+            print(f"[디버그] 카드 텍스트 읽기: 성공 {len(readable_texts)}개 / 실패 {read_errors}개")
+            for i, t in enumerate(readable_texts[:3]):
+                sample = re.sub(r"\s+", " ", t)[:100]
+                print(f"[디버그] 카드#{i} 텍스트 샘플: {sample}")
+
             for price, name, candidate in candidates_to_try:
                 price_str = f"{int(price):,}"
                 name_fragment = name.strip()[:10]
                 print(f"[스크린샷] 매칭 시도: {price_str}원 / '{name_fragment}'")
 
-                for card in cards:
-                    try:
-                        text = card.inner_text()
-                    except Exception:
-                        continue
+                for text in readable_texts:
                     # 줄바꿈/공백 무시하고 비교 (상품명이 화면에서 줄바꿈될 수 있어서)
                     normalized = re.sub(r"\s+", " ", text)
                     normalized_fragment = re.sub(r"\s+", " ", name_fragment)
                     if price_str in normalized and normalized_fragment in normalized:
-                        card.screenshot(path=output_path)
+                        idx = readable_texts.index(text)
+                        cards[idx].screenshot(path=output_path)
                         full_name, discount_rate = _parse_card_text(text, name)
                         print(f"[스크린샷] 매칭 성공: {full_name} / 할인율 {discount_rate}")
                         return candidate, full_name, discount_rate
