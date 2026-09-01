@@ -2,7 +2,10 @@ name: Toss -> Threads 자동 게시
 
 on:
   schedule:
-    - cron: "5,35 22-23,0-14 * * *"
+    # 한국시간(KST) 오전 1시 ~ 오후 10시(22시) 동안 30분 간격 실행 트리거.
+    # 분을 0/30(정각)이 아니라 5/35로 잡아서 GitHub 혼잡 시간대를 피함.
+    # KST = UTC+9 이므로, 01:00~22:00 KST = UTC 16:00(전날)~13:00(당일)
+    - cron: "5,35 16-23,0-13 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -22,6 +25,13 @@ jobs:
       - name: 파이썬 패키지 설치
         shell: bash
         run: pip install -r requirements.txt
+
+      - name: 랜덤 대기 (1~5분)
+        shell: bash
+        run: |
+          DELAY=$((RANDOM % 240 + 60))
+          echo "이번 실행은 ${DELAY}초(약 $((DELAY/60))분) 대기 후 게시합니다."
+          sleep $DELAY
 
       - name: 자동 게시 실행
         shell: bash
