@@ -1,14 +1,15 @@
+cat > /home/claude/coupang-threads-bot/main.py << 'PYEOF'
 # -*- coding: utf-8 -*-
 """
-Toss쇼핑 쉐어링크 -> Threads 자동 게시
+Toss쇼핑 쉐어링크 -> Threads 자동 게시 (카드형 이미지 합성 버전)
 
 흐름:
 1. 하루특가 상품 목록 조회
 2. 상세 조회로 최신 가격/할인율/이미지/품절여부 재확인
 3. 아직 안 올린 것 중 품절 아닌 첫 상품 선택
 4. 쉐어링크(추적 링크) 발급
-5. 캡션 생성 후, API가 준 이미지 URL 그대로 써서 쓰레드에 게시
-   (스크린샷/이미지 업로드 단계가 필요 없음 - 이미지가 이미 공개 URL로 옴)
+5. 상품 사진 위에 할인배지/상품명/가격/별점을 합성한 카드 이미지 생성
+6. 합성 이미지를 imgbb에 업로드해서 공개 URL 확보 후 쓰레드에 게시
 """
 import os
 import sys
@@ -18,8 +19,11 @@ from datetime import datetime, timezone, timedelta
 from toss_api import get_access_token, get_today_deals, get_product_detail, issue_share_link
 from caption_generator import generate_caption
 from threads_api import post_to_threads
+from image_compose import compose_product_card
+from image_host import upload_image_get_url
 
 POSTED_FILE = "posted.json"
+COMPOSED_IMAGE_PATH = "composed_card.png"
 KST = timezone(timedelta(hours=9))
 
 
@@ -48,6 +52,7 @@ def main():
     publisher_id = os.environ["TOSS_PUBLISHER_ID"]
     threads_user_id = os.environ["THREADS_USER_ID"]
     threads_access_token = os.environ["THREADS_ACCESS_TOKEN"]
+    imgbb_api_key = os.environ.get("IMGBB_API_KEY")
 
     posted = load_posted()
 
@@ -62,7 +67,6 @@ def main():
         print("오늘 편성된 하루특가가 없습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
 
-    # 아직 안 올린 상품들의 tacaItemId만 추려서, 상세조회로 최신 정보 재확인 (최대 30개)
     candidate_ids = [it["tacaItemId"] for it in items if it["tacaItemId"] not in posted]
     if not candidate_ids:
         print("오늘 특가 상품을 이미 다 게시했습니다. 다음 실행에서 다시 시도합니다.")
@@ -75,7 +79,7 @@ def main():
     for taca_item_id in candidate_ids:
         detail = detail_map.get(taca_item_id)
         if detail is None:
-            continue  # notFoundIds에 있는 경우 (판매종료/페널티 등) -> 건너뜀
+            continue
         if detail.get("isSoldOut"):
             continue
         target = detail
@@ -89,7 +93,9 @@ def main():
     product_name = target["displayName"]
     price = target["displayPrice"]
     discount_rate = target.get("discountRate")
-    image_url = target.get("thumbnailUrl") or (target.get("mainImageUrls") or [None])[0]
+    review_score = target.get("reviewScore")
+    review_count = target.get("reviewCount")
+    source_image_url = target.get("thumbnailUrl") or (target.get("mainImageUrls") or [None])[0]
 
     print(f"선택된 상품: {product_name} ({int(price):,}원) / 할인율 {discount_rate}")
 
@@ -97,6 +103,23 @@ def main():
     link_result = issue_share_link(token, taca_item_id, publisher_id)
     deeplink = link_result["shortUrl"]
     print(f"쉐어링크: {deeplink}")
+
+    # 카드형 이미지 합성
+    image_url = None
+    if source_image_url:
+        composed = compose_product_card(
+            source_image_url, product_name, price, discount_rate,
+            review_score, review_count, COMPOSED_IMAGE_PATH,
+        )
+        if composed and imgbb_api_key:
+            try:
+                image_url = upload_image_get_url(COMPOSED_IMAGE_PATH, imgbb_api_key)
+            except Exception as e:
+                print(f"[이미지 호스팅] 업로드 실패, 원본 사진으로 대체: {e}")
+                image_url = source_image_url
+        else:
+            # 합성 실패했거나 imgbb 키가 없으면, 원본 상품 사진(이미 공개 URL)으로 대체
+            image_url = source_image_url
 
     caption = generate_caption(product_name, price, deeplink, discount_rate=discount_rate)
     print(f"게시 문구:\n{caption}")
@@ -113,3 +136,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+PYEOF
+echo done
