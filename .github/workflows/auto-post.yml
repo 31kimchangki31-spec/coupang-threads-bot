@@ -1,49 +1,39 @@
 name: Coupang -> Threads 자동 게시
 
 on:
-  # GitHub 내부 스케줄(schedule)은 신뢰성이 낮아 제거함.
-  # 대신 cron-job.org가 이 workflow_dispatch를 API로 직접 호출해서 트리거함.
-  workflow_dispatch: {}
+  schedule:
+    # 매일 UTC 00:00 = 한국시간(KST) 오전 9시
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
 
 permissions:
   contents: write   # posted.json 커밋을 위해 필요
 
 jobs:
   post:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
 
-      - name: 파이썬 버전 확인 (PC에 미리 설치된 파이썬 사용)
-        shell: bash
-        run: python --version
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
-      - name: Playwright 브라우저 설치
-        run: python -m playwright install chromium
-  
-      - name: 랜덤 대기 (1~5분)
-        shell: bash
-        run: |
-          DELAY=$((RANDOM % 240 + 60))
-          echo "이번 실행은 ${DELAY}초(약 $((DELAY/60))분) 대기 후 게시합니다."
-          sleep $DELAY
       - name: 자동 게시 실행
-        shell: bash
         env:
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
-          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
-          PYTHONIOENCODING: utf-8
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # AI 캡션 쓰려면 주석 해제
         run: python main.py
 
-      - name: 게시 기록 커밋
-        shell: bash
+      - name: 게시 기록(posted.json) 커밋
         run: |
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
