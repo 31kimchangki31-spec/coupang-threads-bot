@@ -109,6 +109,7 @@ def main():
         composed = compose_product_card(
             source_image_url, product_name, price, discount_rate,
             review_score, review_count, COMPOSED_IMAGE_PATH,
+            original_price=target.get("originalPrice"),
         )
         if composed and imgbb_api_key:
             try:
