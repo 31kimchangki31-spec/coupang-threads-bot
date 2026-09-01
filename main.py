@@ -126,7 +126,7 @@ def main():
 
     media_id = post_to_threads(
         threads_user_id, threads_access_token, caption,
-        image_url=image_url, topic_tag="광고"
+        image_url=image_url
     )
     print(f"게시 완료. media_id={media_id}")
 
