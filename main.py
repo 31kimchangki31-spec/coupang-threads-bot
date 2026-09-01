@@ -59,3 +59,5 @@ def main():
     print(f"[토스] 하루특가 후보 {len(items)}개")
 
     if not items:
+        print("오늘 편성된 하루특가가 없습니다. 다음 실행에서 다시 시도합니다.")
+        sys.exit(0)
