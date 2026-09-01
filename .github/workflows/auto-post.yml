@@ -31,8 +31,18 @@ jobs:
           TOSS_PUBLISHER_ID: ${{ secrets.TOSS_PUBLISHER_ID }}
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           PYTHONIOENCODING: utf-8
         run: python main.py
+
+      - name: 합성 이미지 업로드(디버그용)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: composed-card
+          path: composed_card.png
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: 게시 기록 커밋
         shell: bash
