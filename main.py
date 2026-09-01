@@ -1,4 +1,3 @@
-cat > /home/claude/coupang-threads-bot/main.py << 'PYEOF'
 # -*- coding: utf-8 -*-
 """
 Toss쇼핑 쉐어링크 -> Threads 자동 게시 (카드형 이미지 합성 버전)
@@ -136,5 +135,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-PYEOF
-echo done
