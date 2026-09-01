@@ -61,3 +61,55 @@ def main():
     if not items:
         print("오늘 편성된 하루특가가 없습니다. 다음 실행에서 다시 시도합니다.")
         sys.exit(0)
+
+    # 아직 안 올린 상품들의 tacaItemId만 추려서, 상세조회로 최신 정보 재확인 (최대 30개)
+    candidate_ids = [it["tacaItemId"] for it in items if it["tacaItemId"] not in posted]
+    if not candidate_ids:
+        print("오늘 특가 상품을 이미 다 게시했습니다. 다음 실행에서 다시 시도합니다.")
+        sys.exit(0)
+
+    detail_result = get_product_detail(token, candidate_ids[:30])
+    detail_map = {d["tacaItemId"]: d for d in detail_result.get("items", [])}
+
+    target = None
+    for taca_item_id in candidate_ids:
+        detail = detail_map.get(taca_item_id)
+        if detail is None:
+            continue  # notFoundIds에 있는 경우 (판매종료/페널티 등) -> 건너뜀
+        if detail.get("isSoldOut"):
+            continue
+        target = detail
+        break
+
+    if target is None:
+        print("게시 가능한(품절 아닌) 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
+        sys.exit(0)
+
+    taca_item_id = target["tacaItemId"]
+    product_name = target["displayName"]
+    price = target["displayPrice"]
+    discount_rate = target.get("discountRate")
+    image_url = target.get("thumbnailUrl") or (target.get("mainImageUrls") or [None])[0]
+
+    print(f"선택된 상품: {product_name} ({int(price):,}원) / 할인율 {discount_rate}")
+
+    # 쉐어링크(추적 링크) 발급
+    link_result = issue_share_link(token, taca_item_id, publisher_id)
+    deeplink = link_result["shortUrl"]
+    print(f"쉐어링크: {deeplink}")
+
+    caption = generate_caption(product_name, price, deeplink, discount_rate=discount_rate)
+    print(f"게시 문구:\n{caption}")
+
+    media_id = post_to_threads(
+        threads_user_id, threads_access_token, caption,
+        image_url=image_url, topic_tag="광고"
+    )
+    print(f"게시 완료. media_id={media_id}")
+
+    posted.add(taca_item_id)
+    save_posted(posted)
+
+
+if __name__ == "__main__":
+    main()
