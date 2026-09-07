@@ -3,16 +3,17 @@
 쿠팡 골드박스 -> 쓰레드 자동 게시.
 
 흐름:
-  1. 골드박스 Open API로 당일 특가 상품 목록 조회
-  2. picks.txt(수동 지정) 또는 필터+점수로 상품 하나 선정
-  3. 파트너스 딥링크 발급
-  4. 할인율/정가 보강 (선택, 실패해도 계속)
-  5. 상품 이미지 + 정보를 홍보 카드 이미지로 렌더링
-  6. imgbb에 업로드해 공개 URL 확보
+  1. 골드박스 Open API로 당일 특가 상품 목록 조회 (상품ID/링크 확보)
+  2. 골드박스 페이지를 한 번 열어 모든 카드의 정확한 정보 수집 + 카드 캡처
+     (API는 정가를 판매가로 주고 할인율을 주지 않으며 상품명도 잘려서 옴)
+  3. 두 데이터를 병합해 상품 하나 선정 (picks.txt 우선, 없으면 필터+점수)
+  4. 제휴 링크 확보 (골드박스 링크는 이미 제휴 링크라 변환 생략)
+  5. 카드 이미지를 Meta 요구 규격(JPEG, 4:5~1.91:1)으로 변환
+  6. GitHub raw -> imgbb 순으로 공개 URL 확보
   7. 캡션 생성 (Claude -> 실패 시 템플릿) 후 쓰레드 게시
   8. posted.json에 기록
 
-DRY_RUN=1 로 실행하면 게시 직전까지만 수행하고 결과를 출력한다.
+DRY_RUN=1 이면 게시 직전까지만 수행한다.
 """
 import json
 import os
@@ -21,13 +22,12 @@ from datetime import datetime, timedelta, timezone
 
 from caption_generator import generate_caption
 from coupang_api import deeplink_for, get_goldbox_products
-from image_host import upload_image_get_url
-from product_card_renderer import render_product_card
+from image_prep import prepare_for_threads
 from product_selector import select_product
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
-CARD_PATH = "composed_card.png"
+FALLBACK_CARD = "composed_card.png"
 KST = timezone(timedelta(hours=9))
 
 
@@ -53,9 +53,7 @@ def save_posted(posted_ids: set) -> None:
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(
             {"date": today_label(), "ids": sorted(posted_ids)},
-            f,
-            ensure_ascii=False,
-            indent=2,
+            f, ensure_ascii=False, indent=2,
         )
 
 
@@ -67,19 +65,40 @@ def require_env(name: str) -> str:
     return value
 
 
+def resolve_image(target: dict) -> str:
+    """
+    게시용 이미지 경로를 만든다.
+    1순위: 페이지에서 캡처한 실제 골드박스 카드
+    2순위: 상품 정보로 직접 렌더링한 카드
+    """
+    captured = target.get("card_image")
+    if captured and os.path.exists(captured):
+        print(f"[이미지] 캡처한 골드박스 카드 사용: {captured}")
+        return prepare_for_threads(captured)
+
+    print("[이미지] 캡처 없음 -> 카드 직접 렌더링")
+    try:
+        from product_card_renderer import render_product_card
+
+        render_product_card(target, FALLBACK_CARD)
+        return prepare_for_threads(FALLBACK_CARD)
+    except Exception as exc:
+        print(f"[이미지] 렌더링도 실패: {exc}")
+        return None
+
+
 def main() -> None:
     dry_run = os.environ.get("DRY_RUN") == "1"
 
     access_key = require_env("COUPANG_ACCESS_KEY")
     secret_key = require_env("COUPANG_SECRET_KEY")
     sub_id = os.environ.get("COUPANG_SUB_ID")
-    imgbb_key = os.environ.get("IMGBB_API_KEY")
 
     if not dry_run:
         threads_user_id = require_env("THREADS_USER_ID")
         threads_token = require_env("THREADS_ACCESS_TOKEN")
 
-    # 1. 골드박스 목록
+    # 1. 골드박스 API 목록
     try:
         products = get_goldbox_products(access_key, secret_key, limit=100)
     except Exception as exc:
@@ -90,63 +109,78 @@ def main() -> None:
         print("골드박스 목록이 비어 있습니다. 다음 실행에서 재시도합니다.")
         sys.exit(0)
 
-    # 2. 상품 선정
+    # 2. 페이지에서 정확한 정보 수집 (실패해도 계속)
+    page_data = {}
+    try:
+        from goldbox_page import scrape_all
+
+        page_data = scrape_all(max_cards=60)
+    except Exception as exc:
+        print(f"[페이지] 수집 건너뜀: {exc}")
+
+    # 3. 선정
     posted = load_posted()
-    target = select_product(products, posted)
+    target = select_product(products, posted, page_data)
     if target is None:
         print("게시 가능한 상품이 없습니다. 다음 실행에서 재시도합니다.")
         sys.exit(0)
 
-    print(
-        f"\n선정: [{target['id']}] {target['name']} / "
-        f"{int(target['price']):,}원 / {target['category']}"
+    origin = target.get("original_price")
+    price_desc = (
+        f"{int(origin):,}원 -> {int(target['price']):,}원"
+        if origin and origin > target["price"]
+        else f"{int(target['price']):,}원"
     )
+    rate = target.get("discount_rate")
+    print(
+        f"\n선정: [{target['id']}] {target['name']}\n"
+        f"      {price_desc}"
+        + (f" ({float(rate):.0f}% 할인)" if rate else "")
+        + (" [쿠폰 조건부]" if target.get("coupon_required") else "")
+    )
+    if not target.get("from_page"):
+        print(
+            "      주의: 페이지 데이터를 못 받아 API 가격을 사용합니다. "
+            "정가일 수 있으니 결과를 확인하세요."
+        )
 
-    # 3. 딥링크
+    # 4. 제휴 링크
     deeplink = deeplink_for(target["product_url"], access_key, secret_key, sub_id)
-    print(f"딥링크: {deeplink}")
+    print(f"링크: {deeplink}")
 
-    # 4. 할인율 보강 (실패 허용)
-    try:
-        from goldbox_enrich import enrich
-
-        target = enrich(target)
-    except Exception as exc:
-        print(f"[보강] 건너뜀: {exc}")
-
-    # 5. 카드 이미지 렌더링
-    image_url = target.get("image_url")
-    try:
-        render_product_card(target, CARD_PATH)
-        print(f"카드 이미지 생성: {CARD_PATH}")
-        if imgbb_key:
-            image_url = upload_image_get_url(CARD_PATH, imgbb_key)
+    # 5~6. 이미지 준비 + 공개 URL
+    image_url = None
+    local_image = resolve_image(target)
+    if local_image:
+        if dry_run:
+            print(f"[DRY_RUN] 이미지 준비 완료(업로드 생략): {local_image}")
         else:
-            print("[이미지] IMGBB_API_KEY 없음 -> 원본 상품 이미지로 게시")
-    except Exception as exc:
-        print(f"[이미지] 카드 생성/업로드 실패, 원본 이미지로 대체: {exc}")
+            from image_host import publish
 
-    # 6. 캡션
+            image_url = publish(local_image)
+
+    # 7. 캡션
     caption = generate_caption(
         target["name"],
         target["price"],
         deeplink,
         discount_rate=target.get("discount_rate"),
+        original_price=target.get("original_price"),
+        coupon_required=target.get("coupon_required", False),
         category=target.get("category", ""),
     )
     print(f"\n--- 게시 문구 ---\n{caption}\n-----------------")
 
     if dry_run:
-        print(f"\n[DRY_RUN] 게시하지 않고 종료. 이미지 URL: {image_url}")
+        print("\n[DRY_RUN] 게시하지 않고 종료합니다.")
         return
 
-    # 7. 게시
+    # 8. 게시
     media_id = post_to_threads(
         threads_user_id, threads_token, caption, image_url=image_url
     )
     print(f"게시 완료. media_id={media_id}")
 
-    # 8. 기록
     posted.add(target["id"])
     save_posted(posted)
 

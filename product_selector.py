@@ -61,6 +61,10 @@ def normalize(product: dict) -> dict:
         "product_url": product.get("productUrl"),
         "category": product.get("categoryName") or "",
         "is_rocket": bool(product.get("isRocket")),
+        "remaining_time": None,
+        "coupon_required": False,
+        "card_image": None,
+        "from_page": False,
     }
 
 
@@ -88,7 +92,7 @@ def _passes_filters(item: dict, config: dict) -> bool:
 
 
 def _score(item: dict, config: dict) -> float:
-    """할인율 위주 + 선호 키워드 가점."""
+    """실제 할인율 위주 + 선호 키워드 가점 + 페이지 데이터 확보 가점."""
     score = 0.0
     try:
         score += float(item.get("discount_rate") or 0)
@@ -96,6 +100,12 @@ def _score(item: dict, config: dict) -> float:
         pass
     if item.get("is_rocket"):
         score += 5
+    # 페이지에서 정확한 가격/할인율을 확보한 상품을 우선한다.
+    # (API만으로는 정가를 판매가로 잘못 표시할 위험이 있음)
+    if item.get("from_page"):
+        score += 15
+    if item.get("card_image"):
+        score += 10
     haystack = f"{item['name']} {item['category']}"
     for word in config["prefer_keywords"]:
         if word and word in haystack:
@@ -110,12 +120,20 @@ def _matches_pick(item: dict, pick: str) -> bool:
     return pick in item["name"]
 
 
-def select_product(products: list, posted_ids: set) -> dict:
+def select_product(products: list, posted_ids: set, page_data: dict = None) -> dict:
     """
     게시할 상품 하나를 고른다. 후보가 없으면 None.
+
+    page_data가 있으면 API 값 위에 페이지에서 읽은 정확한 값을 덮어쓴 뒤 선정한다.
     """
+    from goldbox_page import merge
+
     config = load_config()
     items = [normalize(p) for p in products]
+    if page_data:
+        items = [merge(i, page_data) for i in items]
+        enriched = sum(1 for i in items if i.get("from_page"))
+        print(f"[선정] 페이지 데이터 병합: {enriched}/{len(items)}개")
     fresh = [i for i in items if i["id"] and i["id"] not in posted_ids]
 
     print(f"[선정] 골드박스 {len(items)}개 / 미게시 {len(fresh)}개")
@@ -143,9 +161,17 @@ def select_product(products: list, posted_ids: set) -> dict:
 
     print("[선정] 상위 후보:")
     for item in eligible[:5]:
+        rate = item.get("discount_rate")
+        rate_str = f"{float(rate):.0f}%" if rate else "할인율?"
+        origin = item.get("original_price")
+        price_str = (
+            f"{int(origin):,}->{int(item['price']):,}원"
+            if origin and origin > item["price"]
+            else f"{int(item['price']):,}원"
+        )
         print(
-            f"  - [{item['id']}] {item['name'][:38]} / "
-            f"{int(item['price']):,}원 / 점수 {_score(item, config):.0f}"
+            f"  - [{item['id']}] {item['name'][:34]} / {rate_str} / "
+            f"{price_str} / 점수 {_score(item, config):.0f}"
         )
 
     return eligible[0]

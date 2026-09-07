@@ -126,7 +126,16 @@ def create_deeplink(
 def deeplink_for(
     product_url: str, access_key: str, secret_key: str, sub_id: str = None
 ) -> str:
-    """단일 상품 URL의 추적 링크를 문자열로 반환한다. 실패 시 원본 URL로 폴백."""
+    """
+    단일 상품 URL의 추적 링크를 반환한다.
+
+    골드박스 API가 주는 productUrl은 이미 lptag가 붙은 완성된 제휴 링크다.
+    이걸 다시 딥링크 API에 넣으면 'url convert failed'로 거부되므로 그대로 쓴다.
+    """
+    if "link.coupang.com" in product_url:
+        print("[쿠팡] 이미 제휴 링크 -> 딥링크 변환 생략")
+        return product_url
+
     try:
         results = create_deeplink([product_url], access_key, secret_key, sub_id)
         if results:

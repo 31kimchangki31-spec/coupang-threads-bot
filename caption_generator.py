@@ -59,12 +59,36 @@ def _discount_line(discount_rate) -> str:
     return f"{random.choice(DISCOUNT_EMOJIS)} {rate:.0f}% 할인\n"
 
 
-def _template_body(product_name: str, price, discount_rate=None) -> str:
-    """AI 없이 쓰는 기본 본문."""
+def _price_block(price, original_price=None, discount_rate=None,
+                 coupon_required=False) -> str:
+    """
+    가격 표시 블록. 정가가 있으면 취소선 대신 '->' 로 대비를 준다.
+    쿠폰 적용이 조건인 가격은 반드시 그 사실을 함께 적는다 (표시광고 문제 방지).
+    """
     money = random.choice(MONEY_EMOJIS)
-    discount = _discount_line(discount_rate)
-    price_str = f"{money} {int(price):,}원" if price else ""
-    return f"{product_name}\n{discount}{price_str}".strip()
+    lines = []
+
+    rate_line = _discount_line(discount_rate).strip()
+    if rate_line:
+        lines.append(rate_line)
+
+    if not price:
+        return "\n".join(lines)
+
+    if original_price and original_price > price:
+        lines.append(f"{money} {int(original_price):,}원 → {int(price):,}원")
+    else:
+        lines.append(f"{money} {int(price):,}원")
+
+    if coupon_required:
+        lines.append("※ 쿠폰 적용 시 가격이며, 조건에 따라 달라질 수 있어요")
+
+    return "\n".join(lines)
+
+
+def _template_body(product_name: str) -> str:
+    """AI 없이 쓰는 기본 본문 (상품명만)."""
+    return product_name.strip()
 
 
 def _call_claude(prompt: str, api_key: str, model: str) -> str:
@@ -153,12 +177,15 @@ def generate_caption(
     price,
     deeplink: str,
     discount_rate=None,
+    original_price=None,
+    coupon_required: bool = False,
     category: str = "",
     use_ai: bool = True,
 ) -> str:
     """
     최종 게시글 문구를 만든다.
-    본문(AI 또는 템플릿) + 가격/할인 + 링크 + CTA + 공시 순서로 조립한다.
+    본문(AI 또는 템플릿) + 가격블록 + 링크 + CTA + 공시 순서로 조립한다.
+    공시와 CTA는 AI 응답과 무관하게 항상 붙는다.
     """
     body = ""
     if use_ai:
@@ -168,15 +195,13 @@ def generate_caption(
             print(f"[캡션] AI 실패, 템플릿으로 대체: {exc}")
 
     if not body:
-        body = _template_body(product_name, price, discount_rate)
-        parts = [body]
-    else:
-        # AI 본문에는 가격 정보가 없으므로 별도 줄로 덧붙인다.
-        money = random.choice(MONEY_EMOJIS)
-        info = _discount_line(discount_rate)
-        if price:
-            info += f"{money} {int(price):,}원"
-        parts = [body, info.strip()] if info.strip() else [body]
+        body = _template_body(product_name)
+
+    parts = [body]
+
+    price_block = _price_block(price, original_price, discount_rate, coupon_required)
+    if price_block:
+        parts.append(price_block)
 
     link_emoji = random.choice(LINK_EMOJIS)
     parts.append(f"{link_emoji} {deeplink}")

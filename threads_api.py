@@ -34,6 +34,20 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
     resp = requests.post(create_url, params=params)
     if not resp.ok:
         print(f"[Threads 컨테이너 생성 실패] status={resp.status_code} body={resp.text}")
+        # 이미지 때문에 실패한 경우, 텍스트 전용으로 한 번 더 시도한다.
+        # (Meta 크롤러가 이미지를 못 가져오는 상황에서 게시 자체를 포기하지 않기 위함)
+        if image_url:
+            print("[Threads] 이미지 없이 텍스트 전용으로 재시도합니다.")
+            retry_params = {
+                "text": text,
+                "access_token": access_token,
+                "media_type": "TEXT",
+            }
+            if topic_tag:
+                retry_params["topic_tag"] = topic_tag
+            resp = requests.post(create_url, params=retry_params)
+            if not resp.ok:
+                print(f"[Threads 텍스트 재시도도 실패] body={resp.text}")
     resp.raise_for_status()
     creation_id = resp.json()["id"]
 
