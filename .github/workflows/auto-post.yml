@@ -1,51 +1,62 @@
-name: Toss -> Threads 자동 게시
+name: Coupang -> Threads 자동 게시
 
 on:
   schedule:
-    # 한국시간(KST) 오전 1시 ~ 오후 10시(22시) 동안 30분 간격 실행 트리거.
-    # 분을 0/30(정각)이 아니라 5/35로 잡아서 GitHub 혼잡 시간대를 피함.
-    # KST = UTC+9 이므로, 01:00~22:00 KST = UTC 16:00(전날)~13:00(당일)
-    - cron: "5,35 16-23,0-13 * * *"
-  workflow_dispatch: {}
+    # 한국시간(KST) 오전 9시 / 오후 1시 / 오후 8시 = UTC 00:05 / 04:05 / 11:05
+    # 분을 5로 잡아 GitHub 정각 혼잡 시간대를 피함
+    - cron: "5 0,4,11 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "게시하지 않고 결과만 확인"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: coupang-threads-post
+  cancel-in-progress: false
+
 jobs:
   post:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
 
-      - name: 파이썬 버전 확인
-        shell: bash
-        run: python --version
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-      - name: 파이썬 패키지 설치
-        shell: bash
-        run: pip install -r requirements.txt
+      - name: 패키지 설치
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
 
       - name: 랜덤 대기 (1~5분)
-        shell: bash
         run: |
           DELAY=$((RANDOM % 240 + 60))
-          echo "이번 실행은 ${DELAY}초(약 $((DELAY/60))분) 대기 후 게시합니다."
+          echo "${DELAY}초 대기 후 게시합니다."
           sleep $DELAY
 
       - name: 자동 게시 실행
-        shell: bash
         env:
-          TOSS_ACCESS_KEY: ${{ secrets.TOSS_ACCESS_KEY }}
-          TOSS_SECRET_KEY: ${{ secrets.TOSS_SECRET_KEY }}
-          TOSS_PUBLISHER_ID: ${{ secrets.TOSS_PUBLISHER_ID }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          COUPANG_SUB_ID: ${{ secrets.COUPANG_SUB_ID }}
           THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
         run: python main.py
 
-      - name: 합성 이미지 업로드(디버그용)
+      - name: 카드 이미지 업로드 (디버그용)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -55,7 +66,7 @@ jobs:
           retention-days: 3
 
       - name: 게시 기록 커밋
-        shell: bash
+        if: success() && inputs.dry_run != true
         run: |
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
