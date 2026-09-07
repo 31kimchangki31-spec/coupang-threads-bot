@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
+        with:
+          # 카드 이미지를 커밋/푸시해서 호스팅하므로 자격증명이 유지되어야 한다
+          persist-credentials: true
 
       - name: 파이썬 설정
         uses: actions/setup-python@v5
@@ -60,8 +63,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: composed-card
-          path: composed_card.png
+          name: card-images
+          path: |
+            post_image.jpg
+            composed_card.png
+            cards/
           if-no-files-found: ignore
           retention-days: 3
 
@@ -72,4 +78,4 @@ jobs:
           git config user.email "actions@github.com"
           git add posted.json
           git diff --cached --quiet || git commit -m "chore: 게시 기록 업데이트"
-          git push
+          git push origin HEAD:${GITHUB_REF_NAME}
