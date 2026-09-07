@@ -124,12 +124,18 @@ def scrape_all(max_cards: int = 60) -> dict:
     os.makedirs(CARD_DIR, exist_ok=True)
     collected = {}
 
+    proxy = os.environ.get("BROWSER_PROXY")
+    launch_args = {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+    }
+    if proxy:
+        launch_args["proxy"] = {"server": proxy}
+        print("[페이지] 프록시 사용")
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
+            browser = p.chromium.launch(**launch_args)
             context = browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -157,6 +163,30 @@ def scrape_all(max_cards: int = 60) -> dict:
                 # 클래스명은 배포마다 바뀌지만 /vp/products/ 링크 구조는 안정적이다.
                 links = page.query_selector_all("a[href*='/vp/products/']")
                 print(f"[페이지] 상품 링크 {len(links)}개 발견")
+
+                if not links:
+                    # 링크가 0개면 차단인지 렌더 실패인지 구분해서 알려준다
+                    title = page.title()
+                    body_head = re.sub(r"\s+", " ", page.inner_text("body"))[:200]
+                    print(f"[페이지] 진단 - 제목: {title!r}")
+                    print(f"[페이지] 진단 - URL: {page.url}")
+                    print(f"[페이지] 진단 - 본문 앞부분: {body_head!r}")
+                    blocked = any(
+                        w in (title + body_head)
+                        for w in ("Access Denied", "차단", "비정상", "Forbidden",
+                                  "잠시 후", "Error", "봇")
+                    )
+                    if blocked or not body_head.strip():
+                        print(
+                            "[페이지] 쿠팡이 접근을 차단한 것으로 보입니다.\n"
+                            "         GitHub Actions의 데이터센터 IP는 차단되는 경우가 많습니다.\n"
+                            "         해결: self-hosted 러너 사용 또는 BROWSER_PROXY 설정"
+                        )
+                    try:
+                        page.screenshot(path="debug_goldbox.png", full_page=False)
+                        print("[페이지] 진단 스크린샷 저장: debug_goldbox.png")
+                    except Exception:
+                        pass
 
                 seen = set()
                 for link in links[: max_cards * 3]:

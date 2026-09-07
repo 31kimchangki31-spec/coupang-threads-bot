@@ -140,9 +140,16 @@ def main() -> None:
     )
     if not target.get("from_page"):
         print(
-            "      주의: 페이지 데이터를 못 받아 API 가격을 사용합니다. "
-            "정가일 수 있으니 결과를 확인하세요."
+            "\n" + "!" * 60 + "\n"
+            "  경고: 페이지 데이터 없음 -> API 값으로 게시합니다.\n"
+            "  API 가격은 '정가'일 수 있어 특가로 잘못 광고될 위험이 있습니다.\n"
+            "  상품명도 잘리고 할인율도 표시되지 않습니다.\n"
+            "  REQUIRE_PAGE_DATA=1 로 두면 이런 경우 게시하지 않고 건너뜁니다.\n"
+            + "!" * 60
         )
+        if os.environ.get("REQUIRE_PAGE_DATA") == "1":
+            print("REQUIRE_PAGE_DATA=1 이므로 게시하지 않고 종료합니다.")
+            sys.exit(0)
 
     # 4. 제휴 링크
     deeplink = deeplink_for(target["product_url"], access_key, secret_key, sub_id)
@@ -176,8 +183,14 @@ def main() -> None:
         return
 
     # 8. 게시
+    # 주제 태그. 기본 "광고". POST_TOPIC_TAG 로 변경하거나 빈 값으로 끌 수 있다.
+    topic_tag = os.environ.get("POST_TOPIC_TAG", "광고").strip() or None
+    if topic_tag:
+        print(f"주제 태그: {topic_tag}")
+
     media_id = post_to_threads(
-        threads_user_id, threads_token, caption, image_url=image_url
+        threads_user_id, threads_token, caption,
+        image_url=image_url, topic_tag=topic_tag,
     )
     print(f"게시 완료. media_id={media_id}")
 

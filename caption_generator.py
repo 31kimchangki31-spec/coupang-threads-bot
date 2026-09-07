@@ -14,10 +14,19 @@ import random
 import requests
 
 # ---------------------------------------------------------------------------
-# 정책상 반드시 들어가야 하는 문구 (임의 삭제 금지)
+# 경제적 이해관계 표시 문구.
+#
+# 2024-12-01 시행 개정 심사지침은 표시 문구를 게시물 '끝부분'에 두는 방식을
+# 더 이상 적절하다고 보지 않는다. 그래서 본문 첫 줄로 올리고 문장을 줄였다.
+# 위치를 앞으로 옮긴 대신 길이가 짧아져 전체 글자 수는 오히려 줄어든다.
+#
+# 주제 태그(topic_tag)는 사용자가 직접 입력하는 '주제'일 뿐이고, Meta가 붙이는
+# 유료광고 표시가 아니다. 따라서 태그만으로는 이 문구를 대체할 수 없다.
 # ---------------------------------------------------------------------------
-DISCLOSURE = "이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
-CTA = '댓글에 "나도" 남겨주세요'
+DISCLOSURE = "광고 · 쿠팡 파트너스 수수료를 받습니다"
+
+# 고정 CTA. 사용하지 않으려면 빈 문자열로 둔다.
+CTA = ""
 
 MONEY_EMOJIS = ["💰", "💸", "🏷️"]
 LINK_EMOJIS = ["🔗", "👉", "📎"]
@@ -164,7 +173,7 @@ def _sanitize(body: str) -> str:
             continue
         if "coupang.com" in stripped or "link.coupang" in stripped:
             continue  # 링크는 시스템이 붙인다
-        if DISCLOSURE[:15] in stripped:
+        if DISCLOSURE[:8] in stripped:
             continue  # 공시 중복 방지
         for word in banned:
             stripped = stripped.replace(word, "")
@@ -197,7 +206,8 @@ def generate_caption(
     if not body:
         body = _template_body(product_name)
 
-    parts = [body]
+    # 표시 문구를 첫 줄에 둔다 (심사지침 권장 위치)
+    parts = [DISCLOSURE, body]
 
     price_block = _price_block(price, original_price, discount_rate, coupon_required)
     if price_block:
@@ -205,7 +215,8 @@ def generate_caption(
 
     link_emoji = random.choice(LINK_EMOJIS)
     parts.append(f"{link_emoji} {deeplink}")
-    parts.append(CTA)
-    parts.append(f"({DISCLOSURE})")
 
-    return "\n\n".join(p for p in parts if p)
+    if CTA.strip():
+        parts.append(CTA)
+
+    return "\n\n".join(p for p in parts if p and p.strip())
