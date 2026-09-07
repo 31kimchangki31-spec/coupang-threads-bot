@@ -87,6 +87,18 @@ def render_product_card(product: dict, output_path: str) -> None:
     else:
         image_html = '<div class="image-placeholder">상품 이미지 없음</div>'
 
+    # 할인율을 못 구했으면 배지를 아예 그리지 않는다 ("-%" 표시 방지)
+    if discount_text:
+        discount_html = f'<div class="discount">{discount_text}<small>%</small></div>'
+    else:
+        discount_html = '<div class="no-discount"></div>'
+
+    # 로켓배송 상품이 아니면 라벨을 숨긴다
+    if product.get("is_rocket"):
+        rocket_html = '<div class="rocket">🚀 로켓배송</div>'
+    else:
+        rocket_html = '<div class="rocket-spacer"></div>'
+
     template = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -213,15 +225,17 @@ def render_product_card(product: dict, output_path: str) -> None:
     font-size: 23px;
   }}
   .timer span {{ margin-left: 3px; }}
+  .rocket-spacer {{ height: 45px; }}
+  .no-discount {{ height: 18px; }}
 </style>
 </head>
 <body>
   <main class="card">
     <section class="visual">{image_html}</section>
     <section class="details">
-      <div class="rocket">🚀 로켓 <strong>내일</strong></div>
+      {rocket_html}
       <div class="name">{_safe_text(product.get("name"))}</div>
-      <div class="discount">{discount_text or "-"}<small>%</small></div>
+      {discount_html}
       <div class="prices">{_money(sale_price)} {original_html}</div>
       {timer_html}
     </section>
@@ -233,7 +247,7 @@ def render_product_card(product: dict, output_path: str) -> None:
     with sync_playwright() as playwright:
         launch_options = {
             "headless": True,
-            "channel": "chromium",
+            
             "args": ["--headless=new", "--no-sandbox"],
         }
         proxy = _proxy_options()

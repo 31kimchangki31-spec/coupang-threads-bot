@@ -1,0 +1,8 @@
+{
+  "min_price": 5000,
+  "max_price": 150000,
+  "rocket_only": false,
+  "exclude_keywords": ["성인", "담배", "의약품", "렌즈", "주식", "코인"],
+  "prefer_keywords": ["무드등", "조명", "피규어", "인테리어", "감성", "캠핑", "홈카페"],
+  "prefer_weight": 40
+}

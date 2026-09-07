@@ -1,28 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-Toss쇼핑 쉐어링크 -> Threads 자동 게시 (카드형 이미지 합성 버전)
+쿠팡 골드박스 -> 쓰레드 자동 게시.
 
 흐름:
-1. 하루특가 상품 목록 조회
-2. 상세 조회로 최신 가격/할인율/이미지/품절여부 재확인
-3. 아직 안 올린 것 중 품절 아닌 첫 상품 선택
-4. 쉐어링크(추적 링크) 발급
-5. 상품 사진 위에 할인배지/상품명/가격/별점을 합성한 카드 이미지 생성
-6. 합성 이미지를 imgbb에 업로드해서 공개 URL 확보 후 쓰레드에 게시
+  1. 골드박스 Open API로 당일 특가 상품 목록 조회
+  2. picks.txt(수동 지정) 또는 필터+점수로 상품 하나 선정
+  3. 파트너스 딥링크 발급
+  4. 할인율/정가 보강 (선택, 실패해도 계속)
+  5. 상품 이미지 + 정보를 홍보 카드 이미지로 렌더링
+  6. imgbb에 업로드해 공개 URL 확보
+  7. 캡션 생성 (Claude -> 실패 시 템플릿) 후 쓰레드 게시
+  8. posted.json에 기록
+
+DRY_RUN=1 로 실행하면 게시 직전까지만 수행하고 결과를 출력한다.
 """
+import json
 import os
 import sys
-import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from toss_api import get_access_token, get_today_deals, get_product_detail, issue_share_link
 from caption_generator import generate_caption
-from threads_api import post_to_threads
-from image_compose import compose_product_card
+from coupang_api import deeplink_for, get_goldbox_products
 from image_host import upload_image_get_url
+from product_card_renderer import render_product_card
+from product_selector import select_product
+from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
-COMPOSED_IMAGE_PATH = "composed_card.png"
+CARD_PATH = "composed_card.png"
 KST = timezone(timedelta(hours=9))
 
 
@@ -31,106 +36,118 @@ def today_label() -> str:
 
 
 def load_posted() -> set:
-    if os.path.exists(POSTED_FILE):
+    """당일 게시 기록만 유지한다 (골드박스는 매일 갱신되므로)."""
+    if not os.path.exists(POSTED_FILE):
+        return set()
+    try:
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict) and data.get("date") == today_label():
-            return set(data.get("ids", []))
+    except Exception:
+        return set()
+    if isinstance(data, dict) and data.get("date") == today_label():
+        return {str(i) for i in data.get("ids", [])}
     return set()
 
 
-def save_posted(posted_ids: set):
-    data = {"date": today_label(), "ids": list(posted_ids)}
+def save_posted(posted_ids: set) -> None:
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def main():
-    access_key = os.environ["TOSS_ACCESS_KEY"]
-    secret_key = os.environ["TOSS_SECRET_KEY"]
-    publisher_id = os.environ["TOSS_PUBLISHER_ID"]
-    threads_user_id = os.environ["THREADS_USER_ID"]
-    threads_access_token = os.environ["THREADS_ACCESS_TOKEN"]
-    imgbb_api_key = os.environ.get("IMGBB_API_KEY")
-
-    posted = load_posted()
-
-    token = get_access_token(access_key, secret_key)
-    print("[토스] 액세스 토큰 발급 완료")
-
-    deals = get_today_deals(token, size=30)
-    items = deals.get("items", [])
-    print(f"[토스] 하루특가 후보 {len(items)}개")
-
-    if not items:
-        print("오늘 편성된 하루특가가 없습니다. 다음 실행에서 다시 시도합니다.")
-        sys.exit(0)
-
-    candidate_ids = [it["tacaItemId"] for it in items if it["tacaItemId"] not in posted]
-    if not candidate_ids:
-        print("오늘 특가 상품을 이미 다 게시했습니다. 다음 실행에서 다시 시도합니다.")
-        sys.exit(0)
-
-    detail_result = get_product_detail(token, candidate_ids[:30])
-    detail_map = {d["tacaItemId"]: d for d in detail_result.get("items", [])}
-
-    target = None
-    for taca_item_id in candidate_ids:
-        detail = detail_map.get(taca_item_id)
-        if detail is None:
-            continue
-        if detail.get("isSoldOut"):
-            continue
-        target = detail
-        break
-
-    if target is None:
-        print("게시 가능한(품절 아닌) 상품을 찾지 못했습니다. 다음 실행에서 다시 시도합니다.")
-        sys.exit(0)
-
-    taca_item_id = target["tacaItemId"]
-    product_name = target["displayName"]
-    price = target["displayPrice"]
-    discount_rate = target.get("discountRate")
-    review_score = target.get("reviewScore")
-    review_count = target.get("reviewCount")
-    source_image_url = target.get("thumbnailUrl") or (target.get("mainImageUrls") or [None])[0]
-
-    print(f"선택된 상품: {product_name} ({int(price):,}원) / 할인율 {discount_rate}")
-
-    # 쉐어링크(추적 링크) 발급
-    link_result = issue_share_link(token, taca_item_id, publisher_id)
-    deeplink = link_result["shortUrl"]
-    print(f"쉐어링크: {deeplink}")
-
-    # 카드형 이미지 합성
-    image_url = None
-    if source_image_url:
-        composed = compose_product_card(
-            source_image_url, product_name, price, discount_rate,
-            review_score, review_count, COMPOSED_IMAGE_PATH,
-            original_price=target.get("originalPrice"),
+        json.dump(
+            {"date": today_label(), "ids": sorted(posted_ids)},
+            f,
+            ensure_ascii=False,
+            indent=2,
         )
-        if composed and imgbb_api_key:
-            try:
-                image_url = upload_image_get_url(COMPOSED_IMAGE_PATH, imgbb_api_key)
-            except Exception as e:
-                print(f"[이미지 호스팅] 업로드 실패, 원본 사진으로 대체: {e}")
-                image_url = source_image_url
+
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        print(f"[오류] 환경변수 {name} 가 설정되지 않았습니다.")
+        sys.exit(1)
+    return value
+
+
+def main() -> None:
+    dry_run = os.environ.get("DRY_RUN") == "1"
+
+    access_key = require_env("COUPANG_ACCESS_KEY")
+    secret_key = require_env("COUPANG_SECRET_KEY")
+    sub_id = os.environ.get("COUPANG_SUB_ID")
+    imgbb_key = os.environ.get("IMGBB_API_KEY")
+
+    if not dry_run:
+        threads_user_id = require_env("THREADS_USER_ID")
+        threads_token = require_env("THREADS_ACCESS_TOKEN")
+
+    # 1. 골드박스 목록
+    try:
+        products = get_goldbox_products(access_key, secret_key, limit=100)
+    except Exception as exc:
+        print(f"[오류] 골드박스 조회 실패: {exc}")
+        sys.exit(1)
+
+    if not products:
+        print("골드박스 목록이 비어 있습니다. 다음 실행에서 재시도합니다.")
+        sys.exit(0)
+
+    # 2. 상품 선정
+    posted = load_posted()
+    target = select_product(products, posted)
+    if target is None:
+        print("게시 가능한 상품이 없습니다. 다음 실행에서 재시도합니다.")
+        sys.exit(0)
+
+    print(
+        f"\n선정: [{target['id']}] {target['name']} / "
+        f"{int(target['price']):,}원 / {target['category']}"
+    )
+
+    # 3. 딥링크
+    deeplink = deeplink_for(target["product_url"], access_key, secret_key, sub_id)
+    print(f"딥링크: {deeplink}")
+
+    # 4. 할인율 보강 (실패 허용)
+    try:
+        from goldbox_enrich import enrich
+
+        target = enrich(target)
+    except Exception as exc:
+        print(f"[보강] 건너뜀: {exc}")
+
+    # 5. 카드 이미지 렌더링
+    image_url = target.get("image_url")
+    try:
+        render_product_card(target, CARD_PATH)
+        print(f"카드 이미지 생성: {CARD_PATH}")
+        if imgbb_key:
+            image_url = upload_image_get_url(CARD_PATH, imgbb_key)
         else:
-            # 합성 실패했거나 imgbb 키가 없으면, 원본 상품 사진(이미 공개 URL)으로 대체
-            image_url = source_image_url
+            print("[이미지] IMGBB_API_KEY 없음 -> 원본 상품 이미지로 게시")
+    except Exception as exc:
+        print(f"[이미지] 카드 생성/업로드 실패, 원본 이미지로 대체: {exc}")
 
-    caption = generate_caption(product_name, price, deeplink, discount_rate=discount_rate)
-    print(f"게시 문구:\n{caption}")
+    # 6. 캡션
+    caption = generate_caption(
+        target["name"],
+        target["price"],
+        deeplink,
+        discount_rate=target.get("discount_rate"),
+        category=target.get("category", ""),
+    )
+    print(f"\n--- 게시 문구 ---\n{caption}\n-----------------")
 
+    if dry_run:
+        print(f"\n[DRY_RUN] 게시하지 않고 종료. 이미지 URL: {image_url}")
+        return
+
+    # 7. 게시
     media_id = post_to_threads(
-        threads_user_id, threads_access_token, caption,
-        image_url=image_url
+        threads_user_id, threads_token, caption, image_url=image_url
     )
     print(f"게시 완료. media_id={media_id}")
 
-    posted.add(taca_item_id)
+    # 8. 기록
+    posted.add(target["id"])
     save_posted(posted)
 
 
