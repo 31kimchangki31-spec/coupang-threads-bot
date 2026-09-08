@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+cards/
+post_image.jpg
+composed_card.png
+.browser-profile/
