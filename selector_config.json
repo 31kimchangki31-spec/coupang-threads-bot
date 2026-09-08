@@ -20,5 +20,6 @@
     "홈카페"
   ],
   "prefer_weight": 40,
-  "require_card_image": true
+  "require_card_image": true,
+  "order": "page"
 }
