@@ -71,7 +71,18 @@ NOISE_LINE = re.compile(r"판매됨|배송|도착|남음|리뷰")
 # 단위당 가격, 리뷰 수 등은 괄호 안에 있으므로 통째로 제거한다
 PAREN_PATTERN = re.compile(r"\([^)]*\)")
 # 상품명 줄에서 배제할 패턴
-NOT_A_NAME = re.compile(r"원|%|로켓|남음|판매|쿠폰|무료|배송|도착|\(\d")
+NOT_A_NAME = re.compile(
+    r"원|%|로켓|남음|판매|쿠폰|무료|배송|도착|혜택|반품|설치|적용|\(\d"
+)
+# 상품명 앞에 붙는 배지성 단어. 반복 제거한다.
+BADGE_PREFIX = re.compile(
+    r"^(사은품|증정|쿠폰|단독특가|특가|기획세트|한정수량|신상품|베스트|"
+    r"오늘출발|당일발송|무료배송|R\.?LUX|WOW|와우)\s*[|·:]?\s*",
+    re.IGNORECASE,
+)
+# 브랜드 배지만 있는 줄 (상품명이 아님)
+BRAND_ONLY = re.compile(r"^(R\.?LUX|WOW|와우|LUX|BEST|NEW)$", re.IGNORECASE)
+HANGUL = re.compile(r"[가-힣]")
 
 
 def _parse_card(text: str) -> dict:
@@ -87,7 +98,8 @@ def _parse_card(text: str) -> dict:
         "coupon_required": False,
     }
 
-    prices = []          # (금액, 쿠폰조건여부)
+    prices = []           # (금액, 쿠폰조건여부)
+    name_candidates = []  # 상품명 후보
     for line in lines:
         timer = TIMER_PATTERN.search(line)
         if timer and not result["remaining_time"]:
@@ -99,13 +111,18 @@ def _parse_card(text: str) -> dict:
             result["discount_rate"] = float(percent.group(1))
             continue
 
-        # 상품명: 가격/배지/배송 정보가 없는 첫 줄
-        if (
-            result["full_name"] is None
-            and len(line) > 5
-            and not NOT_A_NAME.search(line)
-        ):
-            result["full_name"] = line
+        # 상품명 후보 수집. 첫 줄을 그냥 쓰면 브랜드 배지("R.LUX", "Sulwhasoo")를
+        # 상품명으로 잡는 문제가 생기므로, 후보를 모아 뒤에서 가장 적합한 것을 고른다.
+        if not NOT_A_NAME.search(line):
+            candidate = line
+            # "사은품 설화수 윤조..." 처럼 앞에 붙는 배지 단어를 반복 제거
+            while True:
+                stripped_candidate = BADGE_PREFIX.sub("", candidate).strip()
+                if stripped_candidate == candidate:
+                    break
+                candidate = stripped_candidate
+            if candidate and not BRAND_ONLY.match(candidate) and len(candidate) >= 4:
+                name_candidates.append(candidate)
             continue
 
         # 가격 수집. 조건부 가격 줄과 노이즈 줄은 제외
@@ -121,6 +138,13 @@ def _parse_card(text: str) -> dict:
                 continue
             if amount > 0:
                 prices.append((amount, "쿠폰" in cleaned))
+
+    # 상품명 선택: 한글이 들어간 후보를 우선하고, 그중 가장 긴 것을 쓴다.
+    # (브랜드명은 보통 영문 짧은 줄, 실제 상품명은 한글 긴 줄이다)
+    if name_candidates:
+        hangul_first = [c for c in name_candidates if HANGUL.search(c)]
+        pool = hangul_first or name_candidates
+        result["full_name"] = max(pool, key=len)
 
     if prices:
         amounts = [p[0] for p in prices]
@@ -356,8 +380,24 @@ def merge(api_item: dict, page_data: dict) -> dict:
         return api_item
 
     merged = dict(api_item)
-    if found.get("full_name"):
-        merged["name"] = found["full_name"]
+
+    # 페이지에서 읽은 상품명이 API 이름보다 나을 때만 교체한다.
+    # 파싱이 어긋나 브랜드명만 잡히는 경우를 대비한 안전장치.
+    page_name = (found.get("full_name") or "").strip()
+    api_name = (api_item.get("name") or "").strip()
+    if page_name:
+        better = (
+            len(page_name) >= len(api_name)          # 더 길면 전체 이름일 가능성
+            or api_name in page_name                 # API 이름을 포함하면 확장형
+            or (HANGUL.search(page_name) and not HANGUL.search(api_name))
+        )
+        if better:
+            merged["name"] = page_name
+        else:
+            print(
+                f"[페이지] {api_item['id']}: 파싱된 이름이 부실해 API 이름 유지 "
+                f"({page_name!r} < {api_name!r})"
+            )
     if found.get("sale_price"):
         merged["price"] = found["sale_price"]
     if found.get("original_price"):
