@@ -67,6 +67,22 @@ jobs:
           rm -rf cards post_image.jpg debug_goldbox.png
         continue-on-error: true
 
+      - name: 랜덤 대기
+        run: |
+          # 매번 정확히 :05, :35 에 올라가면 기계적인 패턴이 드러난다.
+          # 0~200초 사이로 흔들어 게시 시각을 분산시킨다.
+          MAX=${DELAY_MAX_SECONDS:-200}
+          if [ -n "${RANDOM:-}" ]; then
+            DELAY=$(( RANDOM % (MAX + 1) ))
+          else
+            # bash 가 아닌 셸로 실행된 경우 대비 (RANDOM 미지원)
+            DELAY=$(awk -v m="$MAX" 'BEGIN{srand();print int(rand()*(m+1))}')
+          fi
+          echo "${DELAY}초 대기 후 게시합니다. (최대 ${MAX}초)"
+          sleep "$DELAY"
+        env:
+          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '200' }}
+
       - name: 자동 게시 실행
         env:
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
