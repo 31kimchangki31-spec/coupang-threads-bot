@@ -2,9 +2,12 @@ name: Coupang -> Threads 자동 게시
 
 on:
   schedule:
-    # 한국시간(KST) 오전 9시 / 오후 1시 / 오후 8시 = UTC 00:05 / 04:05 / 11:05
-    # 분을 5로 잡아 GitHub 정각 혼잡 시간대를 피함
-    - cron: "5 0,4,11 * * *"
+    # KST 07:05 ~ 05:35 사이 30분 간격(매시 5분, 35분)
+    #
+    # KST = UTC+9 이므로 KST 07~05시는 UTC 22~20시에 해당한다.
+    # 제외되는 시간은 UTC 21시(= KST 06시) 한 시간뿐이라
+    # UTC 0-20 과 22-23 을 지정한다. 하루 46회.
+    - cron: "5,35 0-20,22-23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -63,12 +66,6 @@ jobs:
           # .browser-profile 은 쿠키 유지를 위해 지우지 않는다
           rm -rf cards post_image.jpg debug_goldbox.png
         continue-on-error: true
-
-      - name: 랜덤 대기 (1~5분)
-        run: |
-          DELAY=$((RANDOM % 240 + 60))
-          echo "${DELAY}초 대기 후 게시합니다."
-          sleep $DELAY
 
       - name: 자동 게시 실행
         env:
