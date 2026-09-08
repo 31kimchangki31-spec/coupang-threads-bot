@@ -60,6 +60,7 @@ jobs:
 
       - name: 이전 실행 잔재 정리
         run: |
+          # .browser-profile 은 쿠키 유지를 위해 지우지 않는다
           rm -rf cards post_image.jpg debug_goldbox.png
         continue-on-error: true
 
@@ -80,6 +81,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           POST_TOPIC_TAG: ${{ vars.POST_TOPIC_TAG || '광고' }}
           BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
+          # Akamai 우회 관련. 기본값은 실제 크롬 + headed + 프로필 유지.
+          BROWSER_CHANNEL: ${{ vars.BROWSER_CHANNEL || 'chrome' }}
+          HEADLESS: ${{ vars.HEADLESS || '0' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
         run: ${{ steps.py.outputs.cmd }} main.py
