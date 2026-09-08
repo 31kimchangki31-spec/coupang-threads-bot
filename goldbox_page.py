@@ -29,12 +29,20 @@ BROWSER_CHANNEL = os.environ.get("BROWSER_CHANNEL", "chrome")
 HEADLESS = os.environ.get("HEADLESS", "0") == "1"
 PROFILE_DIR = os.environ.get("BROWSER_PROFILE_DIR", ".browser-profile")
 
+# 창 크기. 쿠팡은 반응형이라 폭이 좁으면 카드 배치와 구조가 바뀐다.
+# --start-maximized 는 실제 창 크기와 렌더링 크기를 어긋나게 만들어 쓰지 않는다.
+WINDOW_WIDTH = int(os.environ.get("WINDOW_WIDTH", "1680"))
+WINDOW_HEIGHT = int(os.environ.get("WINDOW_HEIGHT", "1200"))
+
 LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-features=IsolateOrigins,site-per-process",
-    "--start-maximized",
+    f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}",
+    "--window-position=0,0",
+    "--force-device-scale-factor=1",
+    "--hide-scrollbars",
 ]
 # 크롬 상단의 "자동화된 소프트웨어" 표시와 관련 플래그를 제거한다
 IGNORE_ARGS = ["--enable-automation", "--disable-extensions"]
@@ -164,7 +172,7 @@ def scrape_all(max_cards: int = 60) -> dict:
         "headless": HEADLESS,
         "args": LAUNCH_ARGS,
         "ignore_default_args": IGNORE_ARGS,
-        "viewport": {"width": 1600, "height": 1000},
+        "viewport": {"width": WINDOW_WIDTH, "height": WINDOW_HEIGHT},
         "device_scale_factor": 2,
         "locale": "ko-KR",
         "timezone_id": "Asia/Seoul",
@@ -176,7 +184,7 @@ def scrape_all(max_cards: int = 60) -> dict:
 
     print(
         f"[페이지] 브라우저: channel={BROWSER_CHANNEL or 'chromium(번들)'} "
-        f"headless={HEADLESS} profile={PROFILE_DIR}"
+        f"headless={HEADLESS} 창={WINDOW_WIDTH}x{WINDOW_HEIGHT}"
     )
 
     try:
@@ -218,11 +226,14 @@ def scrape_all(max_cards: int = 60) -> dict:
                     page.wait_for_timeout(3000)
                     page.goto(GOLDBOX_URL, timeout=60000, wait_until="domcontentloaded")
                     page.wait_for_timeout(5000)
-                for _ in range(10):
-                    page.mouse.wheel(0, 1600)
-                    page.wait_for_timeout(700)
-                page.mouse.wheel(0, -20000)
-                page.wait_for_timeout(1500)
+                # 천천히 끝까지 내려 지연 로딩을 모두 발동시킨다
+                for _ in range(14):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(900)
+                page.wait_for_timeout(2000)
+                # 다시 위로 올린 뒤, 이미지 디코딩이 끝날 시간을 준다
+                page.mouse.wheel(0, -30000)
+                page.wait_for_timeout(2500)
 
                 # 상품 링크를 기준으로 카드를 찾는다.
                 # 클래스명은 배포마다 바뀌지만 /vp/products/ 링크 구조는 안정적이다.
@@ -288,10 +299,41 @@ def scrape_all(max_cards: int = 60) -> dict:
                         image_path = os.path.join(CARD_DIR, f"{product_id}.png")
                         try:
                             card.scroll_into_view_if_needed(timeout=5000)
-                            page.wait_for_timeout(250)
-                            card.screenshot(path=image_path)
-                            parsed["card_image"] = image_path
-                        except Exception:
+
+                            # 지연 로딩된 상품 이미지가 다 뜨기를 기다린다.
+                            # 안 기다리면 카드 높이가 덜 자란 상태로 잘려서 찍힌다.
+                            try:
+                                card.evaluate(
+                                    """el => Promise.all(
+                                        [...el.querySelectorAll('img')].map(img =>
+                                          img.complete
+                                            ? null
+                                            : new Promise(res => {
+                                                img.addEventListener('load', res, {once:true});
+                                                img.addEventListener('error', res, {once:true});
+                                                setTimeout(res, 3000);
+                                              })
+                                        )
+                                    )"""
+                                )
+                            except Exception:
+                                pass
+                            page.wait_for_timeout(600)
+
+                            # 카드가 제대로 자랐는지 확인. 너무 작으면 잘린 것으로 본다.
+                            box = card.bounding_box()
+                            if not box or box["width"] < 200 or box["height"] < 150:
+                                print(
+                                    f"[페이지] {product_id}: 카드 크기 이상"
+                                    f"({box and int(box['width'])}x"
+                                    f"{box and int(box['height'])}), 캡처 생략"
+                                )
+                                parsed["card_image"] = None
+                            else:
+                                card.screenshot(path=image_path)
+                                parsed["card_image"] = image_path
+                        except Exception as exc:
+                            print(f"[페이지] {product_id}: 캡처 실패 {exc}")
                             parsed["card_image"] = None
 
                         collected[product_id] = parsed
