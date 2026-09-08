@@ -11,7 +11,7 @@
   5. 캡처한 카드를 Meta 요구 규격(JPEG, 4:5~1.91:1)으로 변환
   6. GitHub raw -> imgbb 순으로 공개 URL 확보
   7. 캡션 생성 (Claude -> 실패 시 템플릿) 후 쓰레드 게시
-  8. posted.json에 기록
+  8. posted.json에 기록 (상품ID + 상품명 기준 중복 제외, KST 06시 초기화)
 
 DRY_RUN=1 이면 게시 직전까지만 수행한다.
 """
@@ -23,35 +23,64 @@ from datetime import datetime, timedelta, timezone
 from caption_generator import generate_caption
 from coupang_api import deeplink_for, get_goldbox_products
 from image_prep import prepare_for_threads
-from product_selector import select_product
+from product_selector import normalize_name, select_product
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
 KST = timezone(timedelta(hours=9))
 
+# 게시 기록을 초기화하는 시각(KST). 기본 06시.
+# 게시 스케줄이 07:05~05:35 이므로, 자정이 아니라 06시를 하루 경계로 삼는다.
+RESET_HOUR = int(os.environ.get("RESET_HOUR", "6"))
 
-def today_label() -> str:
-    return datetime.now(KST).strftime("%Y-%m-%d")
+
+def cycle_label() -> str:
+    """
+    현재 게시 주기의 이름. RESET_HOUR 를 하루 경계로 쓴다.
+    예) RESET_HOUR=6 이면 09-09 05:30 은 아직 '09-08' 주기에 속한다.
+    """
+    now = datetime.now(KST)
+    if now.hour < RESET_HOUR:
+        now -= timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
 
 
-def load_posted() -> set:
-    """당일 게시 기록만 유지한다 (골드박스는 매일 갱신되므로)."""
+def load_posted() -> tuple:
+    """
+    현재 주기의 게시 기록을 (상품ID 집합, 상품명키 집합) 으로 돌려준다.
+    주기가 바뀌었으면 빈 집합을 반환해 자동으로 초기화된다.
+    """
+    empty = (set(), set())
     if not os.path.exists(POSTED_FILE):
-        return set()
+        return empty
     try:
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        return set()
-    if isinstance(data, dict) and data.get("date") == today_label():
-        return {str(i) for i in data.get("ids", [])}
-    return set()
+        return empty
+    if not isinstance(data, dict):
+        return empty
+
+    # 이전 버전은 "date"/"ids" 형식이었으므로 둘 다 인정한다
+    label = data.get("cycle") or data.get("date")
+    if label != cycle_label():
+        print(f"[기록] 주기 변경({label} -> {cycle_label()}), 게시 기록 초기화")
+        return empty
+
+    ids = {str(i) for i in data.get("ids", [])}
+    names = {str(n) for n in data.get("names", [])}
+    return ids, names
 
 
-def save_posted(posted_ids: set) -> None:
+def save_posted(posted_ids: set, posted_names: set) -> None:
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(
-            {"date": today_label(), "ids": sorted(posted_ids)},
+            {
+                "cycle": cycle_label(),
+                "reset_hour": RESET_HOUR,
+                "ids": sorted(posted_ids),
+                "names": sorted(posted_names),
+            },
             f, ensure_ascii=False, indent=2,
         )
 
@@ -113,8 +142,9 @@ def main() -> None:
         print(f"[페이지] 수집 건너뜀: {exc}")
 
     # 3. 선정
-    posted = load_posted()
-    target = select_product(products, posted, page_data)
+    posted_ids, posted_names = load_posted()
+    print(f"[기록] 주기 {cycle_label()} / 게시됨 {len(posted_ids)}건")
+    target = select_product(products, posted_ids, page_data, posted_names)
     if target is None:
         print("게시 가능한 상품이 없습니다. 다음 실행에서 재시도합니다.")
         sys.exit(0)
@@ -196,8 +226,9 @@ def main() -> None:
     )
     print(f"게시 완료. media_id={media_id}")
 
-    posted.add(target["id"])
-    save_posted(posted)
+    posted_ids.add(target["id"])
+    posted_names.add(normalize_name(target["name"]))
+    save_posted(posted_ids, posted_names)
 
 
 if __name__ == "__main__":
