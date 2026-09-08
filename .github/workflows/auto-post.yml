@@ -24,6 +24,12 @@ jobs:
     # 쿠팡이 데이터센터 IP를 Akamai 단계에서 차단하므로 가정용 IP가 필요하다.
     # 공용 러너로 돌리려면 ubuntu-latest 로 바꾸고 BROWSER_PROXY 를 설정할 것.
     runs-on: self-hosted
+
+    defaults:
+      run:
+        # 윈도우 러너의 기본 셸은 PowerShell 이라 '||', 'rm -rf' 등이 동작하지 않는다.
+        # Git for Windows 에 포함된 bash 를 쓰면 OS와 무관하게 같은 스크립트가 돌아간다.
+        shell: bash
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -32,15 +38,25 @@ jobs:
           persist-credentials: true
 
       - name: 파이썬 확인
-        run: python3 --version
+        id: py
+        run: |
+          # 윈도우는 python, 리눅스/맥은 python3 인 경우가 많다
+          if command -v python3 >/dev/null 2>&1; then
+            PY=python3
+          else
+            PY=python
+          fi
+          echo "cmd=$PY" >> "$GITHUB_OUTPUT"
+          $PY --version
 
       - name: 패키지 설치
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
-          # --with-deps 는 sudo 가 필요해 self-hosted 에서 실패할 수 있다.
-          # 브라우저 본체만 설치하고, 실패해도 이미 설치돼 있으면 계속 진행한다.
-          python3 -m playwright install chromium || true
+          PY="${{ steps.py.outputs.cmd }}"
+          $PY -m pip install --upgrade pip
+          $PY -m pip install -r requirements.txt
+          # 이미 설치돼 있으면 실패해도 그대로 진행한다.
+          # (--with-deps 는 sudo 가 필요해 self-hosted 에서 쓰지 않는다)
+          $PY -m playwright install chromium || true
 
       - name: 이전 실행 잔재 정리
         run: |
@@ -66,7 +82,7 @@ jobs:
           BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
-        run: python3 main.py
+        run: ${{ steps.py.outputs.cmd }} main.py
 
       - name: 카드 이미지 업로드 (디버그용)
         if: always()
