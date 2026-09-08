@@ -10,7 +10,9 @@
 
 수집 항목 (productId 기준):
   full_name, sale_price, original_price, discount_rate,
-  remaining_time, coupon_required, card_image
+  remaining_time, coupon_required, card_image, position
+
+position 은 페이지에 노출된 순서(0부터). 상단 상품이 잘 팔리므로 선정 기준으로 쓴다.
 """
 import math
 import os
@@ -90,6 +92,7 @@ def _parse_card(text: str) -> dict:
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
 
     result = {
+        "position": None,
         "full_name": None,
         "sale_price": None,
         "original_price": None,
@@ -293,6 +296,7 @@ def scrape_all(max_cards: int = 60) -> dict:
                         pass
 
                 seen = set()
+                position = 0
                 for link in links[: max_cards * 3]:
                     if len(collected) >= max_cards:
                         break
@@ -319,6 +323,9 @@ def scrape_all(max_cards: int = 60) -> dict:
                         parsed = _parse_card(text)
                         if not parsed["sale_price"]:
                             continue
+                        # 페이지 노출 순서(상단부터 0, 1, 2 ...)
+                        parsed["position"] = position
+                        position += 1
 
                         image_path = os.path.join(CARD_DIR, f"{product_id}.png")
                         try:
@@ -404,6 +411,7 @@ def merge(api_item: dict, page_data: dict) -> dict:
         merged["original_price"] = found["original_price"]
     if found.get("discount_rate"):
         merged["discount_rate"] = found["discount_rate"]
+    merged["position"] = found.get("position")
     merged["remaining_time"] = found.get("remaining_time")
     merged["coupon_required"] = found.get("coupon_required", False)
     merged["card_image"] = found.get("card_image")
