@@ -17,7 +17,40 @@ import os
 import re
 
 GOLDBOX_URL = "https://www.coupang.com/np/goldbox"
+HOME_URL = "https://www.coupang.com/"
 CARD_DIR = "cards"
+
+# Akamai Bot Manager 는 IP 가 아니라 브라우저 지문으로 차단한다.
+# 번들 Chromium + headless 조합은 탐지되므로 아래 세 가지를 기본값으로 둔다.
+#   1) PC에 설치된 실제 크롬 사용      (BROWSER_CHANNEL, 기본 chrome)
+#   2) headless 끄기                   (HEADLESS=1 로 켤 수 있음)
+#   3) 프로필 디렉터리 유지 -> 쿠키 축적 (BROWSER_PROFILE_DIR)
+BROWSER_CHANNEL = os.environ.get("BROWSER_CHANNEL", "chrome")
+HEADLESS = os.environ.get("HEADLESS", "0") == "1"
+PROFILE_DIR = os.environ.get("BROWSER_PROFILE_DIR", ".browser-profile")
+
+LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--start-maximized",
+]
+# 크롬 상단의 "자동화된 소프트웨어" 표시와 관련 플래그를 제거한다
+IGNORE_ARGS = ["--enable-automation", "--disable-extensions"]
+
+STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR', 'ko', 'en-US']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || {runtime: {}};
+const origQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (p) => (
+  p.name === 'notifications'
+    ? Promise.resolve({state: Notification.permission})
+    : origQuery(p)
+);
+"""
 
 PRICE_PATTERN = re.compile(r"([\d,]{3,})\s*원")
 PERCENT_ONLY_PATTERN = re.compile(r"^(\d{1,2})\s*%$")
@@ -125,34 +158,66 @@ def scrape_all(max_cards: int = 60) -> dict:
     collected = {}
 
     proxy = os.environ.get("BROWSER_PROXY")
-    launch_args = {
-        "headless": True,
-        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+
+    context_options = {
+        "user_data_dir": os.path.abspath(PROFILE_DIR),
+        "headless": HEADLESS,
+        "args": LAUNCH_ARGS,
+        "ignore_default_args": IGNORE_ARGS,
+        "viewport": {"width": 1600, "height": 1000},
+        "device_scale_factor": 2,
+        "locale": "ko-KR",
+        "timezone_id": "Asia/Seoul",
+        "no_viewport": False,
     }
     if proxy:
-        launch_args["proxy"] = {"server": proxy}
+        context_options["proxy"] = {"server": proxy}
         print("[페이지] 프록시 사용")
+
+    print(
+        f"[페이지] 브라우저: channel={BROWSER_CHANNEL or 'chromium(번들)'} "
+        f"headless={HEADLESS} profile={PROFILE_DIR}"
+    )
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(**launch_args)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1600, "height": 1200},
-                device_scale_factor=2,
-                locale="ko-KR",
-                timezone_id="Asia/Seoul",
-            )
-            page = context.new_page()
-            page.add_init_script(
-                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-            )
+            # 실제 크롬을 먼저 시도하고, 없으면 번들 Chromium 으로 물러난다.
+            context = None
+            for channel in (BROWSER_CHANNEL, None):
+                opts = dict(context_options)
+                if channel:
+                    opts["channel"] = channel
+                try:
+                    context = p.chromium.launch_persistent_context(**opts)
+                    if not channel:
+                        print("[페이지] 실제 크롬을 못 찾아 번들 Chromium 사용")
+                    break
+                except Exception as exc:
+                    print(f"[페이지] channel={channel or 'chromium'} 실행 실패: {exc}")
+            if context is None:
+                raise RuntimeError("브라우저를 실행할 수 없습니다")
+
+            context.add_init_script(STEALTH_SCRIPT)
+            page = context.pages[0] if context.pages else context.new_page()
             try:
-                page.goto(GOLDBOX_URL, timeout=60000)
+                # 골드박스로 직행하면 차단되기 쉽다. 홈을 먼저 거쳐 쿠키를 받는다.
+                print("[페이지] 쿠팡 홈 경유")
+                page.goto(HOME_URL, timeout=60000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3500)
+                page.mouse.wheel(0, 600)
+                page.wait_for_timeout(1200)
+
+                page.goto(GOLDBOX_URL, timeout=60000, wait_until="domcontentloaded")
                 page.wait_for_timeout(5000)
+
+                # 차단 페이지면 한 번 더 시도한다 (쿠키가 쌓인 뒤 통과하는 경우가 있음)
+                if "Access Denied" in page.title():
+                    print("[페이지] 차단 감지, 15초 후 재시도")
+                    page.wait_for_timeout(15000)
+                    page.goto(HOME_URL, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(3000)
+                    page.goto(GOLDBOX_URL, timeout=60000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(5000)
                 for _ in range(10):
                     page.mouse.wheel(0, 1600)
                     page.wait_for_timeout(700)
@@ -178,9 +243,13 @@ def scrape_all(max_cards: int = 60) -> dict:
                     )
                     if blocked or not body_head.strip():
                         print(
-                            "[페이지] 쿠팡이 접근을 차단한 것으로 보입니다.\n"
-                            "         GitHub Actions의 데이터센터 IP는 차단되는 경우가 많습니다.\n"
-                            "         해결: self-hosted 러너 사용 또는 BROWSER_PROXY 설정"
+                            "[페이지] 쿠팡(Akamai)이 접근을 차단했습니다.\n"
+                            "         IP보다 브라우저 지문 때문일 가능성이 큽니다. 확인 순서:\n"
+                            "         1) 실제 크롬 설치 여부 - 로그의 channel 값 확인\n"
+                            "         2) headless 여부 - HEADLESS=0 이어야 하고,\n"
+                            "            러너가 서비스가 아니라 콘솔(로그인 세션)로 떠 있어야 합니다\n"
+                            "         3) 프로필 재사용 여부 - .browser-profile 폴더가 유지되는지\n"
+                            "         4) 위가 다 맞는데도 막히면 BROWSER_PROXY 설정"
                         )
                     try:
                         page.screenshot(path="debug_goldbox.png", full_page=False)
@@ -229,7 +298,7 @@ def scrape_all(max_cards: int = 60) -> dict:
                     except Exception:
                         continue
             finally:
-                browser.close()
+                context.close()
     except Exception as exc:
         print(f"[페이지] 수집 실패, API 데이터만 사용: {exc}")
         return {}
