@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "exclude_keywords": ["성인", "담배", "의약품", "렌즈", "주식", "코인"],
     "prefer_keywords": ["무드등", "조명", "피규어", "인테리어", "감성", "캠핑", "홈카페"],
     "prefer_weight": 40,
+    "require_card_image": True,
 }
 
 
@@ -86,7 +87,11 @@ def _passes_filters(item: dict, config: dict) -> bool:
     for word in config["exclude_keywords"]:
         if word and word in haystack:
             return False
-    if not item.get("product_url") or not item.get("image_url"):
+    if not item.get("product_url"):
+        return False
+    # 캡처된 카드가 없는 상품은 게시할 수 없으므로 후보에서 제외한다.
+    # (이 봇은 쿠팡 페이지 캡처 이미지만 사용한다)
+    if config.get("require_card_image", True) and not item.get("card_image"):
         return False
     return True
 
@@ -104,8 +109,7 @@ def _score(item: dict, config: dict) -> float:
     # (API만으로는 정가를 판매가로 잘못 표시할 위험이 있음)
     if item.get("from_page"):
         score += 15
-    if item.get("card_image"):
-        score += 10
+
     haystack = f"{item['name']} {item['category']}"
     for word in config["prefer_keywords"]:
         if word and word in haystack:
@@ -155,6 +159,13 @@ def select_product(products: list, posted_ids: set, page_data: dict = None) -> d
     eligible = [i for i in fresh if _passes_filters(i, config)]
     print(f"[선정] 필터 통과 {len(eligible)}개")
     if not eligible:
+        captured = sum(1 for i in fresh if i.get("card_image"))
+        if captured == 0:
+            print(
+                "[선정] 캡처된 카드가 하나도 없습니다.\n"
+                "       이 봇은 쿠팡 페이지 캡처 이미지만 사용하므로 게시할 수 없습니다.\n"
+                "       페이지 수집 실패가 원인이니 [페이지] 로그를 확인하세요."
+            )
         return None
 
     eligible.sort(key=lambda i: _score(i, config), reverse=True)
