@@ -35,6 +35,8 @@ DEFAULT_CONFIG = {
     "prefer_keywords": ["무드등", "조명", "피규어", "인테리어", "감성", "캠핑", "홈카페"],
     "prefer_weight": 40,
     "require_card_image": True,
+    # 선정 순서. "page" = 페이지 노출 순서(상단 우선), "score" = 할인율/선호도 점수
+    "order": "page",
 }
 
 
@@ -74,6 +76,7 @@ def normalize(product: dict) -> dict:
         "product_url": product.get("productUrl"),
         "category": product.get("categoryName") or "",
         "is_rocket": bool(product.get("isRocket")),
+        "position": None,
         "remaining_time": None,
         "coupon_required": False,
         "card_image": None,
@@ -202,7 +205,19 @@ def select_product(
             )
         return None
 
-    eligible.sort(key=lambda i: _score(i, config), reverse=True)
+    order = config.get("order", "page")
+    if order == "page":
+        # 페이지 상단 상품이 잘 팔리므로 노출 순서를 그대로 따른다.
+        # 위치를 못 받은 상품(페이지 수집 실패분)은 뒤로 보낸다.
+        eligible.sort(
+            key=lambda i: (
+                i.get("position") if i.get("position") is not None else 10**6
+            )
+        )
+        print("[선정] 페이지 노출 순서 기준")
+    else:
+        eligible.sort(key=lambda i: _score(i, config), reverse=True)
+        print("[선정] 점수 기준")
 
     print("[선정] 상위 후보:")
     for item in eligible[:5]:
@@ -214,9 +229,11 @@ def select_product(
             if origin and origin > item["price"]
             else f"{int(item['price']):,}원"
         )
+        pos = item.get("position")
+        pos_str = f"{pos + 1}번째" if pos is not None else "순서?"
         print(
-            f"  - [{item['id']}] {item['name'][:34]} / {rate_str} / "
-            f"{price_str} / 점수 {_score(item, config):.0f}"
+            f"  - {pos_str:>7s} [{item['id']}] {item['name'][:30]} / "
+            f"{rate_str} / {price_str}"
         )
 
     return eligible[0]
