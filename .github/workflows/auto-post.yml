@@ -79,6 +79,8 @@ jobs:
           POST_TOPIC_TAG: ${{ vars.POST_TOPIC_TAG || '광고' }}
           BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
           # Akamai 우회 관련. 기본값은 실제 크롬 + headed + 프로필 유지.
+          # 게시 기록 초기화 시각(KST). 게시 스케줄이 07:05~05:35 이라 06시가 경계.
+          RESET_HOUR: ${{ vars.RESET_HOUR || '6' }}
           BROWSER_CHANNEL: ${{ vars.BROWSER_CHANNEL || 'chrome' }}
           HEADLESS: ${{ vars.HEADLESS || '0' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
