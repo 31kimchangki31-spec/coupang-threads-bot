@@ -56,7 +56,6 @@ jobs:
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           POST_TOPIC_TAG: ${{ vars.POST_TOPIC_TAG || '광고' }}
-          REQUIRE_PAGE_DATA: ${{ vars.REQUIRE_PAGE_DATA || '0' }}
           BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
@@ -69,7 +68,6 @@ jobs:
           name: card-images
           path: |
             post_image.jpg
-            composed_card.png
             debug_goldbox.png
             cards/
           if-no-files-found: ignore
