@@ -21,7 +21,9 @@ concurrency:
 
 jobs:
   post:
-    runs-on: ubuntu-latest
+    # 쿠팡이 데이터센터 IP를 Akamai 단계에서 차단하므로 가정용 IP가 필요하다.
+    # 공용 러너로 돌리려면 ubuntu-latest 로 바꾸고 BROWSER_PROXY 를 설정할 것.
+    runs-on: self-hosted
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -29,16 +31,21 @@ jobs:
           # 카드 이미지를 커밋/푸시해서 호스팅하므로 자격증명이 유지되어야 한다
           persist-credentials: true
 
-      - name: 파이썬 설정
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
+      - name: 파이썬 확인
+        run: python3 --version
 
       - name: 패키지 설치
         run: |
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+          # --with-deps 는 sudo 가 필요해 self-hosted 에서 실패할 수 있다.
+          # 브라우저 본체만 설치하고, 실패해도 이미 설치돼 있으면 계속 진행한다.
+          python3 -m playwright install chromium || true
+
+      - name: 이전 실행 잔재 정리
+        run: |
+          rm -rf cards post_image.jpg debug_goldbox.png
+        continue-on-error: true
 
       - name: 랜덤 대기 (1~5분)
         run: |
@@ -59,7 +66,7 @@ jobs:
           BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
-        run: python main.py
+        run: python3 main.py
 
       - name: 카드 이미지 업로드 (디버그용)
         if: always()
