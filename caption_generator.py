@@ -14,18 +14,16 @@ import random
 import requests
 
 # ---------------------------------------------------------------------------
-# 경제적 이해관계 표시 문구.
+# 본문 고정 문구.
 #
-# 2024-12-01 시행 개정 심사지침은 표시 문구를 게시물 '끝부분'에 두는 방식을
-# 더 이상 적절하다고 보지 않는다. 그래서 본문 첫 줄로 올리고 문장을 줄였다.
-# 위치를 앞으로 옮긴 대신 길이가 짧아져 전체 글자 수는 오히려 줄어든다.
+# DISCLOSURE: 경제적 이해관계 표시 문구. 빈 문자열이면 출력되지 않는다.
+#   현재는 게시물 상단의 주제 태그(광고)로 대신하는 설정이다.
+#   본문 표시로 되돌리려면 아래에 문구를 넣으면 첫 줄에 붙는다.
+#   예: "광고 · 쿠팡 파트너스 수수료를 받습니다"
 #
-# 주제 태그(topic_tag)는 사용자가 직접 입력하는 '주제'일 뿐이고, Meta가 붙이는
-# 유료광고 표시가 아니다. 따라서 태그만으로는 이 문구를 대체할 수 없다.
+# CTA: 고정 CTA. 빈 문자열이면 출력되지 않는다.
 # ---------------------------------------------------------------------------
-DISCLOSURE = "광고 · 쿠팡 파트너스 수수료를 받습니다"
-
-# 고정 CTA. 사용하지 않으려면 빈 문자열로 둔다.
+DISCLOSURE = ""
 CTA = ""
 
 MONEY_EMOJIS = ["💰", "💸", "🏷️"]
@@ -173,8 +171,8 @@ def _sanitize(body: str) -> str:
             continue
         if "coupang.com" in stripped or "link.coupang" in stripped:
             continue  # 링크는 시스템이 붙인다
-        if DISCLOSURE[:8] in stripped:
-            continue  # 공시 중복 방지
+        if DISCLOSURE and DISCLOSURE[:8] in stripped:
+            continue  # 공시 문구 중복 방지
         for word in banned:
             stripped = stripped.replace(word, "")
         lines.append(stripped.strip())
@@ -206,8 +204,8 @@ def generate_caption(
     if not body:
         body = _template_body(product_name)
 
-    # 표시 문구를 첫 줄에 둔다 (심사지침 권장 위치)
-    parts = [DISCLOSURE, body]
+    # 표시 문구를 쓰는 설정이면 첫 줄에 둔다
+    parts = [DISCLOSURE, body] if DISCLOSURE.strip() else [body]
 
     price_block = _price_block(price, original_price, discount_rate, coupon_required)
     if price_block:
