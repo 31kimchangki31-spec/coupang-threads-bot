@@ -8,7 +8,7 @@
      (API는 정가를 판매가로 주고 할인율을 주지 않으며 상품명도 잘려서 옴)
   3. 두 데이터를 병합해 상품 하나 선정 (picks.txt 우선, 없으면 필터+점수)
   4. 제휴 링크 확보 (골드박스 링크는 이미 제휴 링크라 변환 생략)
-  5. 카드 이미지를 Meta 요구 규격(JPEG, 4:5~1.91:1)으로 변환
+  5. 캡처한 카드를 Meta 요구 규격(JPEG, 4:5~1.91:1)으로 변환
   6. GitHub raw -> imgbb 순으로 공개 URL 확보
   7. 캡션 생성 (Claude -> 실패 시 템플릿) 후 쓰레드 게시
   8. posted.json에 기록
@@ -27,7 +27,6 @@ from product_selector import select_product
 from threads_api import post_to_threads
 
 POSTED_FILE = "posted.json"
-FALLBACK_CARD = "composed_card.png"
 KST = timezone(timedelta(hours=9))
 
 
@@ -67,24 +66,19 @@ def require_env(name: str) -> str:
 
 def resolve_image(target: dict) -> str:
     """
-    게시용 이미지 경로를 만든다.
-    1순위: 페이지에서 캡처한 실제 골드박스 카드
-    2순위: 상품 정보로 직접 렌더링한 카드
+    게시용 이미지를 준비한다.
+
+    쿠팡 페이지에서 캡처한 실제 카드만 사용한다.
+    카드를 직접 그려서 만드는 경로는 없다. 캡처가 없으면 None을 반환하고,
+    호출부에서 게시하지 않고 종료한다.
     """
     captured = target.get("card_image")
-    if captured and os.path.exists(captured):
-        print(f"[이미지] 캡처한 골드박스 카드 사용: {captured}")
-        return prepare_for_threads(captured)
-
-    print("[이미지] 캡처 없음 -> 카드 직접 렌더링")
-    try:
-        from product_card_renderer import render_product_card
-
-        render_product_card(target, FALLBACK_CARD)
-        return prepare_for_threads(FALLBACK_CARD)
-    except Exception as exc:
-        print(f"[이미지] 렌더링도 실패: {exc}")
+    if not captured or not os.path.exists(captured):
+        print("[이미지] 캡처된 카드가 없습니다.")
         return None
+
+    print(f"[이미지] 캡처한 골드박스 카드 사용: {captured}")
+    return prepare_for_threads(captured)
 
 
 def main() -> None:
@@ -144,12 +138,10 @@ def main() -> None:
             "  경고: 페이지 데이터 없음 -> API 값으로 게시합니다.\n"
             "  API 가격은 '정가'일 수 있어 특가로 잘못 광고될 위험이 있습니다.\n"
             "  상품명도 잘리고 할인율도 표시되지 않습니다.\n"
-            "  REQUIRE_PAGE_DATA=1 로 두면 이런 경우 게시하지 않고 건너뜁니다.\n"
+            "  캡처도 없으므로 이 상품은 게시되지 않습니다.\n"
             + "!" * 60
         )
-        if os.environ.get("REQUIRE_PAGE_DATA") == "1":
-            print("REQUIRE_PAGE_DATA=1 이므로 게시하지 않고 종료합니다.")
-            sys.exit(0)
+
 
     # 4. 제휴 링크
     deeplink = deeplink_for(target["product_url"], access_key, secret_key, sub_id)
@@ -158,13 +150,23 @@ def main() -> None:
     # 5~6. 이미지 준비 + 공개 URL
     image_url = None
     local_image = resolve_image(target)
-    if local_image:
-        if dry_run:
-            print(f"[DRY_RUN] 이미지 준비 완료(업로드 생략): {local_image}")
-        else:
-            from image_host import publish
+    if not local_image:
+        print(
+            "\n캡처 이미지가 없어 게시하지 않고 종료합니다.\n"
+            "  이 봇은 쿠팡 페이지에서 캡처한 카드만 사용합니다.\n"
+            "  페이지 수집이 실패한 경우이니 위의 [페이지] 로그를 확인하세요."
+        )
+        sys.exit(0)
 
-            image_url = publish(local_image)
+    if dry_run:
+        print(f"[DRY_RUN] 이미지 준비 완료(업로드 생략): {local_image}")
+    else:
+        from image_host import publish
+
+        image_url = publish(local_image)
+        if not image_url:
+            print("공개 URL 확보 실패로 게시하지 않고 종료합니다.")
+            sys.exit(0)
 
     # 7. 캡션
     caption = generate_caption(
