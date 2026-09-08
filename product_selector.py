@@ -12,6 +12,18 @@ import json
 import os
 import re
 
+def normalize_name(name: str) -> str:
+    """
+    상품명 비교용 키. 대괄호 표기와 공백/기호를 걷어내고 소문자화한다.
+    상품ID가 달라도 사실상 같은 상품이면 중복으로 걸러내기 위한 것.
+    """
+    if not name:
+        return ""
+    text = re.sub(r"\[[^\]]*\]", " ", name)      # [행복미트] 같은 판매자 표기 제거
+    text = re.sub(r"[^0-9A-Za-z가-힣]", "", text)  # 공백/기호 제거
+    return text.lower()
+
+
 PICKS_FILE = "picks.txt"
 CONFIG_FILE = "selector_config.json"
 
@@ -124,23 +136,45 @@ def _matches_pick(item: dict, pick: str) -> bool:
     return pick in item["name"]
 
 
-def select_product(products: list, posted_ids: set, page_data: dict = None) -> dict:
+def select_product(
+    products: list,
+    posted_ids: set,
+    page_data: dict = None,
+    posted_names: set = None,
+) -> dict:
     """
     게시할 상품 하나를 고른다. 후보가 없으면 None.
 
     page_data가 있으면 API 값 위에 페이지에서 읽은 정확한 값을 덮어쓴 뒤 선정한다.
+    posted_ids / posted_names 에 걸리는 상품은 중복으로 보고 제외한다.
     """
     from goldbox_page import merge
 
     config = load_config()
+    posted_names = posted_names or set()
     items = [normalize(p) for p in products]
     if page_data:
         items = [merge(i, page_data) for i in items]
         enriched = sum(1 for i in items if i.get("from_page"))
         print(f"[선정] 페이지 데이터 병합: {enriched}/{len(items)}개")
-    fresh = [i for i in items if i["id"] and i["id"] not in posted_ids]
+    # 중복 제외는 페이지 병합 이후에 한다(병합 뒤 상품명이 정확해지므로)
+    fresh = []
+    dup_id = dup_name = 0
+    for item in items:
+        if not item["id"]:
+            continue
+        if item["id"] in posted_ids:
+            dup_id += 1
+            continue
+        if posted_names and normalize_name(item["name"]) in posted_names:
+            dup_name += 1
+            continue
+        fresh.append(item)
 
-    print(f"[선정] 골드박스 {len(items)}개 / 미게시 {len(fresh)}개")
+    print(
+        f"[선정] 골드박스 {len(items)}개 / 미게시 {len(fresh)}개 "
+        f"(중복제외 ID {dup_id}건, 상품명 {dup_name}건)"
+    )
 
     if not fresh:
         return None
