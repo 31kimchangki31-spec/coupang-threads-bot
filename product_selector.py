@@ -180,6 +180,11 @@ def select_product(
     )
 
     if not fresh:
+        print(
+            "[선정] 이번 주기에 게시할 새 상품이 없습니다.\n"
+            f"       골드박스 {len(items)}개 전부가 이미 게시되었습니다.\n"
+            "       다음 초기화(KST 06시) 또는 골드박스 갱신 후 재개됩니다."
+        )
         return None
 
     # 1) 수동 지정 우선
@@ -196,12 +201,25 @@ def select_product(
     eligible = [i for i in fresh if _passes_filters(i, config)]
     print(f"[선정] 필터 통과 {len(eligible)}개")
     if not eligible:
-        captured = sum(1 for i in fresh if i.get("card_image"))
-        if captured == 0:
+        total_captured = sum(1 for i in items if i.get("card_image"))
+        fresh_captured = sum(1 for i in fresh if i.get("card_image"))
+
+        if total_captured == 0:
             print(
                 "[선정] 캡처된 카드가 하나도 없습니다.\n"
-                "       이 봇은 쿠팡 페이지 캡처 이미지만 사용하므로 게시할 수 없습니다.\n"
-                "       페이지 수집 실패가 원인이니 [페이지] 로그를 확인하세요."
+                "       페이지 수집이 실패했습니다. [페이지] 로그를 확인하세요."
+            )
+        elif fresh_captured == 0:
+            print(
+                f"[선정] 캡처된 카드 {total_captured}개가 모두 이미 게시된 상품입니다.\n"
+                "       수집이 아니라 '새 상품 부족'이 원인입니다.\n"
+                "       스크롤이 더 아래까지 내려가야 새 후보가 나옵니다.\n"
+                "       [페이지] 스크롤 완료 로그의 링크 개수를 확인하세요."
+            )
+        else:
+            print(
+                f"[선정] 미게시 캡처본 {fresh_captured}개가 모두 필터에 걸렸습니다.\n"
+                "       selector_config.json 의 가격 범위와 제외 키워드를 확인하세요."
             )
         return None
 
