@@ -19,10 +19,60 @@ import time
 IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload"
 PUBLIC_DIR = "docs/cards"
 
+# 하루 46회 게시하면 이미지가 빠르게 쌓인다. 최근 N개만 남기고 정리한다.
+KEEP_IMAGES = int(os.environ.get("KEEP_CARD_IMAGES", "30"))
+
 
 def _run(cmd: list) -> tuple:
     proc = subprocess.run(cmd, capture_output=True, text=True)
     return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def _prune_old_images() -> None:
+    """오래된 카드 이미지를 지운다 (파일명이 타임스탬프라 이름순 = 시간순)."""
+    try:
+        if not os.path.isdir(PUBLIC_DIR):
+            return
+        files = sorted(
+            f for f in os.listdir(PUBLIC_DIR)
+            if os.path.isfile(os.path.join(PUBLIC_DIR, f))
+        )
+        excess = files[:-KEEP_IMAGES] if len(files) > KEEP_IMAGES else []
+        for name in excess:
+            _run(["git", "rm", "-f", "--ignore-unmatch", os.path.join(PUBLIC_DIR, name)])
+        if excess:
+            print(f"[이미지] 오래된 카드 이미지 {len(excess)}개 정리")
+    except Exception as exc:
+        print(f"[이미지] 이미지 정리 건너뜀: {exc}")
+
+
+def push_with_rebase(branch: str, label: str = "기록", attempts: int = 3) -> bool:
+    """
+    원격이 앞서 있을 수 있으므로 rebase 후 푸시한다.
+
+    러너가 체크아웃한 뒤에 저장소가 갱신되면(웹에서 파일 수정 등)
+    푸시가 non-fast-forward 로 거부된다. 그때마다 원격을 당겨와 다시 시도한다.
+    """
+    for attempt in range(1, attempts + 1):
+        code, out = _run(["git", "push", "origin", f"HEAD:{branch}"])
+        if code == 0:
+            return True
+
+        if attempt == attempts:
+            print(f"[{label}] git push 최종 실패: {out}")
+            return False
+
+        print(f"[{label}] push 거부({attempt}/{attempts}), 원격 변경을 가져와 재시도")
+        _run(["git", "fetch", "origin", branch])
+        rc, ro = _run(
+            ["git", "pull", "--rebase", "--autostash", "origin", branch]
+        )
+        if rc != 0:
+            print(f"[{label}] rebase 실패: {ro}")
+            # rebase 가 꼬였으면 중단하고 원격 위에 다시 올린다
+            _run(["git", "rebase", "--abort"])
+            return False
+    return False
 
 
 def upload_via_github(image_path: str) -> str:
@@ -48,14 +98,14 @@ def upload_via_github(image_path: str) -> str:
         print(f"[이미지] git add 실패: {out}")
         return None
 
+    _prune_old_images()
+
     code, out = _run(["git", "commit", "-m", f"chore: 카드 이미지 {filename}"])
     if code != 0 and "nothing to commit" not in out:
         print(f"[이미지] git commit 실패: {out}")
         return None
 
-    code, out = _run(["git", "push", "origin", f"HEAD:{branch}"])
-    if code != 0:
-        print(f"[이미지] git push 실패: {out}")
+    if not push_with_rebase(branch, label="이미지"):
         return None
 
     url = f"https://raw.githubusercontent.com/{repo}/{branch}/{PUBLIC_DIR}/{filename}"
