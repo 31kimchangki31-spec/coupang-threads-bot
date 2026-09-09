@@ -180,10 +180,110 @@ def _parse_card(text: str) -> dict:
 
     return result
 
+def _card_of(link):
+    """상품 링크에서 카드 컨테이너 요소를 찾는다."""
+    try:
+        return link.evaluate_handle(
+            "el => el.closest('li') || el.closest('[class*=card]') || el.parentElement"
+        ).as_element()
+    except Exception:
+        return None
+
+
+def _capture(page, card, product_id: str):
+    """카드를 이미지로 저장한다. 실패하면 None."""
+    image_path = os.path.join(CARD_DIR, f"{product_id}.png")
+    try:
+        # 카드 안의 지연 로딩 이미지가 다 뜨기를 기다린다.
+        # 안 기다리면 카드 높이가 덜 자란 상태로 잘려서 찍힌다.
+        try:
+            card.evaluate(
+                """el => Promise.all(
+                    [...el.querySelectorAll('img')].map(img =>
+                      img.complete ? null : new Promise(res => {
+                        img.addEventListener('load', res, {once:true});
+                        img.addEventListener('error', res, {once:true});
+                        setTimeout(res, 2500);
+                      })
+                    )
+                )"""
+            )
+        except Exception:
+            pass
+        page.wait_for_timeout(300)
+
+        box = card.bounding_box()
+        if not box or box["width"] < 200 or box["height"] < 150:
+            print(
+                f"[페이지] {product_id}: 카드 크기 이상"
+                f"({box and int(box['width'])}x{box and int(box['height'])}), 캡처 생략"
+            )
+            return None
+
+        card.screenshot(path=image_path)
+        return image_path
+    except Exception as exc:
+        print(f"[페이지] {product_id}: 캡처 실패 {exc}")
+        return None
+
+
+def _harvest(page, collected: dict, max_cards: int) -> int:
+    """
+    현재 화면에 올라와 있는 카드들을 수집한다.
+
+    골드박스는 가상 스크롤이라 DOM에 25개 정도만 유지되고, 아래로 내려가면
+    위쪽 카드가 DOM에서 제거된다. 그래서 스크롤을 끝낸 뒤 한 번에 모으는 게
+    아니라, 스크롤 중간중간 화면에 보이는 것을 그때그때 담아야 한다.
+
+    반환: 이번 호출에서 새로 담은 개수
+    """
+    added = 0
+    try:
+        links = page.query_selector_all(PRODUCT_LINK_SELECTOR)
+    except Exception:
+        return 0
+
+    for link in links:
+        if len(collected) >= max_cards:
+            break
+        try:
+            href = link.get_attribute("href") or ""
+            id_match = re.search(r"/vp/products/(\d+)", href)
+            if not id_match:
+                continue
+            product_id = id_match.group(1)
+            if product_id in collected:
+                continue
+
+            card = _card_of(link)
+            if card is None:
+                continue
+
+            text = card.inner_text()
+            if not text or len(text.strip()) < 10:
+                continue
+
+            parsed = _parse_card(text)
+            if not parsed["sale_price"]:
+                continue
+
+            # 발견 순서 = 페이지 노출 순서 (위에서 아래로 스크롤하므로)
+            parsed["position"] = len(collected)
+            parsed["card_image"] = _capture(page, card, product_id)
+
+            collected[product_id] = parsed
+            added += 1
+        except Exception:
+            continue
+
+    return added
+
 
 def scrape_all(max_cards: int = 60) -> dict:
     """
-    골드박스 페이지를 한 번 열어 모든 카드를 파싱하고 개별 캡처한다.
+    골드박스 페이지를 열어 카드를 파싱하고 개별 캡처한다.
+    스크롤하면서 화면에 나타나는 카드를 순차적으로 수집한다.
+
     반환: {productId(str): {수집 항목...}}
     실패하면 빈 dict.
     """
@@ -201,7 +301,6 @@ def scrape_all(max_cards: int = 60) -> dict:
     collected = {}
 
     proxy = os.environ.get("BROWSER_PROXY")
-
     context_options = {
         "user_data_dir": os.path.abspath(PROFILE_DIR),
         "headless": HEADLESS,
@@ -261,178 +360,103 @@ def scrape_all(max_cards: int = 60) -> dict:
                     page.wait_for_timeout(3000)
                     page.goto(GOLDBOX_URL, timeout=60000, wait_until="domcontentloaded")
                     page.wait_for_timeout(5000)
-                # 상품 목록이 렌더될 때까지 기다린다
+
                 try:
                     page.wait_for_selector(PRODUCT_LINK_SELECTOR, timeout=20000)
                 except Exception:
                     print("[페이지] 상품 목록 렌더 대기 시간 초과")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(2500)
 
-                def count_links():
-                    return len(page.query_selector_all(PRODUCT_LINK_SELECTOR))
+                initial = len(page.query_selector_all(PRODUCT_LINK_SELECTOR))
+                if initial == 0:
+                    _diagnose(page)
+                    return {}
 
-                # 새 상품이 안 늘어날 때까지 내린다.
-                # mouse.wheel 은 포커스 상태에 따라 무시되는 경우가 있어 JS 로 스크롤한다.
-                previous = count_links()
-                print(f"[페이지] 스크롤 시작 (초기 {previous}개)")
+                # 스크롤 전에 화면 상단부터 수집 시작
+                added = _harvest(page, collected, max_cards)
+                print(f"[페이지] 수집 시작: {len(collected)}개 (신규 {added})")
+
                 stable = 0
                 rounds = 0
-                while rounds < MAX_SCROLL_ROUNDS and stable < STABLE_LIMIT:
+                while (
+                    rounds < MAX_SCROLL_ROUNDS
+                    and stable < STABLE_LIMIT
+                    and len(collected) < max_cards
+                ):
                     rounds += 1
                     page.evaluate(
-                        "window.scrollBy(0, Math.round(window.innerHeight * 0.85))"
+                        "window.scrollBy(0, Math.round(window.innerHeight * 0.8))"
                     )
                     page.wait_for_timeout(SCROLL_WAIT_MS)
 
-                    current = count_links()
-                    if current > previous:
+                    # 캡처 중 scroll_into_view 로 위치가 흔들릴 수 있어
+                    # 현재 위치를 기억한 뒤 수집하고 되돌린다.
+                    try:
+                        before_y = page.evaluate("window.scrollY")
+                    except Exception:
+                        before_y = None
+
+                    added = _harvest(page, collected, max_cards)
+
+                    if added:
                         stable = 0
-                        print(f"[페이지] 스크롤 {rounds}회 -> {current}개")
+                        print(f"[페이지] 스크롤 {rounds}회 -> 누적 {len(collected)}개")
                     else:
                         stable += 1
-                    previous = current
 
-                    if current >= max_cards:
-                        print(f"[페이지] 목표치 도달({current}개), 스크롤 종료")
-                        break
-
-                print(f"[페이지] 스크롤 완료: {rounds}회 / 링크 {previous}개")
-
-                # 여전히 너무 적으면 키보드 End 로 한 번 더 시도한다
-                if previous < 10:
-                    print("[페이지] 링크가 적어 End 키로 재시도")
-                    try:
-                        page.keyboard.press("End")
-                        page.wait_for_timeout(2500)
-                        for _ in range(10):
-                            page.keyboard.press("End")
-                            page.wait_for_timeout(1200)
-                        previous = count_links()
-                        print(f"[페이지] End 키 후 링크 {previous}개")
-                    except Exception as exc:
-                        print(f"[페이지] End 키 재시도 실패: {exc}")
-
-                # 맨 위로 돌린 뒤 이미지 디코딩이 끝날 시간을 준다
-                page.wait_for_timeout(1500)
-                page.evaluate("window.scrollTo(0, 0)")
-                page.wait_for_timeout(2500)
-
-                # 상품 링크를 기준으로 카드를 찾는다.
-                # 클래스명은 배포마다 바뀌지만 /vp/products/ 링크 구조는 안정적이다.
-                links = page.query_selector_all(PRODUCT_LINK_SELECTOR)
-                print(f"[페이지] 상품 링크 {len(links)}개 발견")
-
-                if not links:
-                    # 링크가 0개면 차단인지 렌더 실패인지 구분해서 알려준다
-                    title = page.title()
-                    body_head = re.sub(r"\s+", " ", page.inner_text("body"))[:200]
-                    print(f"[페이지] 진단 - 제목: {title!r}")
-                    print(f"[페이지] 진단 - URL: {page.url}")
-                    print(f"[페이지] 진단 - 본문 앞부분: {body_head!r}")
-                    blocked = any(
-                        w in (title + body_head)
-                        for w in ("Access Denied", "차단", "비정상", "Forbidden",
-                                  "잠시 후", "Error", "봇")
-                    )
-                    if blocked or not body_head.strip():
-                        print(
-                            "[페이지] 쿠팡(Akamai)이 접근을 차단했습니다.\n"
-                            "         IP보다 브라우저 지문 때문일 가능성이 큽니다. 확인 순서:\n"
-                            "         1) 실제 크롬 설치 여부 - 로그의 channel 값 확인\n"
-                            "         2) headless 여부 - HEADLESS=0 이어야 하고,\n"
-                            "            러너가 서비스가 아니라 콘솔(로그인 세션)로 떠 있어야 합니다\n"
-                            "         3) 프로필 재사용 여부 - .browser-profile 폴더가 유지되는지\n"
-                            "         4) 위가 다 맞는데도 막히면 BROWSER_PROXY 설정"
-                        )
-                    try:
-                        page.screenshot(path="debug_goldbox.png", full_page=False)
-                        print("[페이지] 진단 스크린샷 저장: debug_goldbox.png")
-                    except Exception:
-                        pass
-
-                seen = set()
-                position = 0
-                for link in links[: max_cards * 3]:
-                    if len(collected) >= max_cards:
-                        break
-                    try:
-                        href = link.get_attribute("href") or ""
-                        id_match = re.search(r"/vp/products/(\d+)", href)
-                        if not id_match:
-                            continue
-                        product_id = id_match.group(1)
-                        if product_id in seen:
-                            continue
-                        seen.add(product_id)
-
-                        card = link.evaluate_handle(
-                            "el => el.closest('li') || el.parentElement"
-                        ).as_element()
-                        if card is None:
-                            continue
-
-                        text = card.inner_text()
-                        if not text or len(text.strip()) < 10:
-                            continue
-
-                        parsed = _parse_card(text)
-                        if not parsed["sale_price"]:
-                            continue
-                        # 페이지 노출 순서(상단부터 0, 1, 2 ...)
-                        parsed["position"] = position
-                        position += 1
-
-                        image_path = os.path.join(CARD_DIR, f"{product_id}.png")
+                    if before_y is not None:
                         try:
-                            card.scroll_into_view_if_needed(timeout=5000)
+                            page.evaluate(f"window.scrollTo(0, {before_y})")
+                            page.wait_for_timeout(200)
+                        except Exception:
+                            pass
 
-                            # 지연 로딩된 상품 이미지가 다 뜨기를 기다린다.
-                            # 안 기다리면 카드 높이가 덜 자란 상태로 잘려서 찍힌다.
-                            try:
-                                card.evaluate(
-                                    """el => Promise.all(
-                                        [...el.querySelectorAll('img')].map(img =>
-                                          img.complete
-                                            ? null
-                                            : new Promise(res => {
-                                                img.addEventListener('load', res, {once:true});
-                                                img.addEventListener('error', res, {once:true});
-                                                setTimeout(res, 3000);
-                                              })
-                                        )
-                                    )"""
-                                )
-                            except Exception:
-                                pass
-                            page.wait_for_timeout(600)
-
-                            # 카드가 제대로 자랐는지 확인. 너무 작으면 잘린 것으로 본다.
-                            box = card.bounding_box()
-                            if not box or box["width"] < 200 or box["height"] < 150:
-                                print(
-                                    f"[페이지] {product_id}: 카드 크기 이상"
-                                    f"({box and int(box['width'])}x"
-                                    f"{box and int(box['height'])}), 캡처 생략"
-                                )
-                                parsed["card_image"] = None
-                            else:
-                                card.screenshot(path=image_path)
-                                parsed["card_image"] = image_path
-                        except Exception as exc:
-                            print(f"[페이지] {product_id}: 캡처 실패 {exc}")
-                            parsed["card_image"] = None
-
-                        collected[product_id] = parsed
-                    except Exception:
-                        continue
+                captured = sum(1 for v in collected.values() if v.get("card_image"))
+                print(
+                    f"[페이지] 스크롤 완료: {rounds}회 / "
+                    f"수집 {len(collected)}개 (캡처 성공 {captured}개)"
+                )
             finally:
                 context.close()
     except Exception as exc:
         print(f"[페이지] 수집 실패, API 데이터만 사용: {exc}")
-        return {}
+        return collected
 
-    print(f"[페이지] 카드 {len(collected)}개 수집 완료")
     return collected
+
+
+def _diagnose(page) -> None:
+    """상품 링크가 하나도 없을 때 차단인지 렌더 실패인지 알려준다."""
+    try:
+        title = page.title()
+        body_head = re.sub(r"\s+", " ", page.inner_text("body"))[:200]
+    except Exception:
+        title, body_head = "", ""
+
+    print("[페이지] 상품 링크 0개 발견")
+    print(f"[페이지] 진단 - 제목: {title!r}")
+    print(f"[페이지] 진단 - URL: {page.url}")
+    print(f"[페이지] 진단 - 본문 앞부분: {body_head!r}")
+
+    blocked = any(
+        w in (title + body_head)
+        for w in ("Access Denied", "차단", "비정상", "Forbidden", "잠시 후", "Error", "봇")
+    )
+    if blocked or not body_head.strip():
+        print(
+            "[페이지] 쿠팡(Akamai)이 접근을 차단했습니다.\n"
+            "         IP보다 브라우저 지문 때문일 가능성이 큽니다. 확인 순서:\n"
+            "         1) 실제 크롬 설치 여부 - 로그의 channel 값 확인\n"
+            "         2) headless 여부 - HEADLESS=0 이어야 하고,\n"
+            "            러너가 서비스가 아니라 콘솔(로그인 세션)로 떠 있어야 합니다\n"
+            "         3) 프로필 재사용 여부 - .browser-profile 폴더가 유지되는지\n"
+            "         4) 위가 다 맞는데도 막히면 BROWSER_PROXY 설정"
+        )
+    try:
+        page.screenshot(path="debug_goldbox.png", full_page=False)
+        print("[페이지] 진단 스크린샷 저장: debug_goldbox.png")
+    except Exception:
+        pass
 
 
 def merge(api_item: dict, page_data: dict) -> dict:
