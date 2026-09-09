@@ -97,6 +97,7 @@ jobs:
           # Akamai 우회 관련. 기본값은 실제 크롬 + headed + 프로필 유지.
           # 게시 기록 초기화 시각(KST). 게시 스케줄이 07:05~05:35 이라 06시가 경계.
           RESET_HOUR: ${{ vars.RESET_HOUR || '6' }}
+          KEEP_CARD_IMAGES: ${{ vars.KEEP_CARD_IMAGES || '30' }}
           BROWSER_CHANNEL: ${{ vars.BROWSER_CHANNEL || 'chrome' }}
           HEADLESS: ${{ vars.HEADLESS || '0' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
@@ -121,5 +122,25 @@ jobs:
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
           git add posted.json
-          git diff --cached --quiet || git commit -m "chore: 게시 기록 업데이트"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git diff --cached --quiet && { echo "변경 없음"; exit 0; }
+          git commit -m "chore: 게시 기록 업데이트"
+
+          # 러너가 체크아웃한 뒤 원격이 갱신되면 push 가 거부된다.
+          # 원격 변경을 rebase 로 당겨와 최대 3회까지 재시도한다.
+          BRANCH="${GITHUB_REF_NAME}"
+          for i in 1 2 3; do
+            if git push origin "HEAD:${BRANCH}"; then
+              echo "게시 기록 푸시 완료"
+              exit 0
+            fi
+            echo "push 거부 (${i}/3), 원격 변경을 가져와 재시도"
+            git fetch origin "$BRANCH"
+            git pull --rebase --autostash origin "$BRANCH" || {
+              git rebase --abort || true
+              echo "rebase 실패"
+              exit 1
+            }
+            sleep 3
+          done
+          echo "게시 기록 푸시 실패 - 다음 실행에서 중복 게시될 수 있습니다"
+          exit 1
