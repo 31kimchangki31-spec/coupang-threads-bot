@@ -1,6 +1,6 @@
 {
-  "min_price": 5000,
-  "max_price": 150000,
+  "min_price": 1000,
+  "max_price": 1000000,
   "rocket_only": false,
   "exclude_keywords": [
     "성인",
