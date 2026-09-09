@@ -36,6 +36,14 @@ PROFILE_DIR = os.environ.get("BROWSER_PROFILE_DIR", ".browser-profile")
 WINDOW_WIDTH = int(os.environ.get("WINDOW_WIDTH", "1680"))
 WINDOW_HEIGHT = int(os.environ.get("WINDOW_HEIGHT", "1200"))
 
+# 스크롤 설정. 고정 횟수로는 지연 로딩을 다 발동시키지 못해
+# '새 상품이 안 늘어날 때까지' 내리는 방식을 쓴다.
+MAX_SCROLL_ROUNDS = int(os.environ.get("MAX_SCROLL_ROUNDS", "80"))
+SCROLL_WAIT_MS = int(os.environ.get("SCROLL_WAIT_MS", "800"))
+STABLE_LIMIT = 4          # 연속 N회 증가 없으면 끝으로 판단
+
+PRODUCT_LINK_SELECTOR = "a[href*='/vp/products/']"
+
 LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-first-run",
@@ -253,18 +261,65 @@ def scrape_all(max_cards: int = 60) -> dict:
                     page.wait_for_timeout(3000)
                     page.goto(GOLDBOX_URL, timeout=60000, wait_until="domcontentloaded")
                     page.wait_for_timeout(5000)
-                # 천천히 끝까지 내려 지연 로딩을 모두 발동시킨다
-                for _ in range(14):
-                    page.mouse.wheel(0, 1200)
-                    page.wait_for_timeout(900)
+                # 상품 목록이 렌더될 때까지 기다린다
+                try:
+                    page.wait_for_selector(PRODUCT_LINK_SELECTOR, timeout=20000)
+                except Exception:
+                    print("[페이지] 상품 목록 렌더 대기 시간 초과")
                 page.wait_for_timeout(2000)
-                # 다시 위로 올린 뒤, 이미지 디코딩이 끝날 시간을 준다
-                page.mouse.wheel(0, -30000)
+
+                def count_links():
+                    return len(page.query_selector_all(PRODUCT_LINK_SELECTOR))
+
+                # 새 상품이 안 늘어날 때까지 내린다.
+                # mouse.wheel 은 포커스 상태에 따라 무시되는 경우가 있어 JS 로 스크롤한다.
+                previous = count_links()
+                print(f"[페이지] 스크롤 시작 (초기 {previous}개)")
+                stable = 0
+                rounds = 0
+                while rounds < MAX_SCROLL_ROUNDS and stable < STABLE_LIMIT:
+                    rounds += 1
+                    page.evaluate(
+                        "window.scrollBy(0, Math.round(window.innerHeight * 0.85))"
+                    )
+                    page.wait_for_timeout(SCROLL_WAIT_MS)
+
+                    current = count_links()
+                    if current > previous:
+                        stable = 0
+                        print(f"[페이지] 스크롤 {rounds}회 -> {current}개")
+                    else:
+                        stable += 1
+                    previous = current
+
+                    if current >= max_cards:
+                        print(f"[페이지] 목표치 도달({current}개), 스크롤 종료")
+                        break
+
+                print(f"[페이지] 스크롤 완료: {rounds}회 / 링크 {previous}개")
+
+                # 여전히 너무 적으면 키보드 End 로 한 번 더 시도한다
+                if previous < 10:
+                    print("[페이지] 링크가 적어 End 키로 재시도")
+                    try:
+                        page.keyboard.press("End")
+                        page.wait_for_timeout(2500)
+                        for _ in range(10):
+                            page.keyboard.press("End")
+                            page.wait_for_timeout(1200)
+                        previous = count_links()
+                        print(f"[페이지] End 키 후 링크 {previous}개")
+                    except Exception as exc:
+                        print(f"[페이지] End 키 재시도 실패: {exc}")
+
+                # 맨 위로 돌린 뒤 이미지 디코딩이 끝날 시간을 준다
+                page.wait_for_timeout(1500)
+                page.evaluate("window.scrollTo(0, 0)")
                 page.wait_for_timeout(2500)
 
                 # 상품 링크를 기준으로 카드를 찾는다.
                 # 클래스명은 배포마다 바뀌지만 /vp/products/ 링크 구조는 안정적이다.
-                links = page.query_selector_all("a[href*='/vp/products/']")
+                links = page.query_selector_all(PRODUCT_LINK_SELECTOR)
                 print(f"[페이지] 상품 링크 {len(links)}개 발견")
 
                 if not links:
