@@ -28,6 +28,35 @@ def _run(cmd: list) -> tuple:
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+def wait_until_reachable(url: str, attempts: int = 8, interval: int = 4) -> bool:
+    """
+    이미지 URL이 실제로 공개 접근 가능한지 확인한다.
+
+    Meta 는 자체 크롤러로 이미지를 내려받는다. 푸시 직후에는 raw CDN 반영이
+    덜 되어 404가 나는 경우가 있는데, 그 상태로 게시하면 Meta 가 이미지를
+    못 가져와 링크 미리보기만 붙은 글이 올라간다. 그래서 미리 확인한다.
+    """
+    import requests
+
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, timeout=15, stream=True)
+            content_type = resp.headers.get("content-type", "")
+            if resp.ok and content_type.startswith("image/"):
+                print(f"[이미지] URL 접근 확인 ({attempt}회차, {content_type})")
+                return True
+            print(
+                f"[이미지] URL 확인 {attempt}/{attempts}: "
+                f"status={resp.status_code} type={content_type or '없음'}"
+            )
+        except Exception as exc:
+            print(f"[이미지] URL 확인 {attempt}/{attempts} 실패: {exc}")
+
+        if attempt < attempts:
+            time.sleep(interval)
+    return False
+
+
 def _prune_old_images() -> None:
     """오래된 카드 이미지를 지운다 (파일명이 타임스탬프라 이름순 = 시간순)."""
     try:
@@ -109,8 +138,9 @@ def upload_via_github(image_path: str) -> str:
         return None
 
     url = f"https://raw.githubusercontent.com/{repo}/{branch}/{PUBLIC_DIR}/{filename}"
-    # 푸시 직후 raw CDN에 반영될 시간을 준다
-    time.sleep(5)
+    if not wait_until_reachable(url):
+        print("[이미지] GitHub raw 반영 확인 실패")
+        return None
     print(f"[이미지] GitHub 호스팅 성공: {url}")
     return url
 
@@ -155,9 +185,12 @@ def publish(image_path: str) -> str:
     imgbb_key = os.environ.get("IMGBB_API_KEY")
     if imgbb_key:
         try:
-            return upload_image_get_url(image_path, imgbb_key)
+            candidate = upload_image_get_url(image_path, imgbb_key)
+            if wait_until_reachable(candidate, attempts=3, interval=2):
+                return candidate
+            print("[이미지] imgbb URL 접근 확인 실패")
         except Exception as exc:
             print(f"[이미지] imgbb 업로드 실패: {exc}")
 
-    print("[이미지] 공개 URL 확보 실패 -> 텍스트 전용 게시로 진행")
+    print("[이미지] 공개 URL 확보 실패")
     return None
