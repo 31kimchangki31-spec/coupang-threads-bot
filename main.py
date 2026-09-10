@@ -195,7 +195,11 @@ def main() -> None:
 
         image_url = publish(local_image)
         if not image_url:
-            print("공개 URL 확보 실패로 게시하지 않고 종료합니다.")
+            print(
+                "\n이미지 공개 URL 확보에 실패해 게시하지 않고 종료합니다.\n"
+                "  이미지 없이 올리면 링크 미리보기만 붙은 글이 됩니다.\n"
+                "  다음 실행에서 재시도합니다."
+            )
             sys.exit(0)
 
     # 7. 캡션
