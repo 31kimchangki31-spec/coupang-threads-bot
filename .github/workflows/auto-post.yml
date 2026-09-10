@@ -2,12 +2,12 @@ name: Coupang -> Threads 자동 게시
 
 on:
   schedule:
-    # KST 07:05 ~ 05:35 사이 30분 간격(매시 5분, 35분)
+    # KST 07:05 ~ 23:35 사이 30분 간격(매시 5분, 35분)
     #
-    # KST = UTC+9 이므로 KST 07~05시는 UTC 22~20시에 해당한다.
-    # 제외되는 시간은 UTC 21시(= KST 06시) 한 시간뿐이라
-    # UTC 0-20 과 22-23 을 지정한다. 하루 46회.
-    - cron: "5,35 0-20,22-23 * * *"
+    # KST = UTC+9 이므로 KST 07~23시는 UTC 22~14시에 해당한다.
+    # (KST 07시 = UTC 22시, KST 23시 = UTC 14시)
+    # 심야(KST 00~06시)는 게시하지 않는다. 하루 34회.
+    - cron: "5,35 0-14,22-23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -40,8 +40,42 @@ jobs:
           # 카드 이미지를 커밋/푸시해서 호스팅하므로 자격증명이 유지되어야 한다
           persist-credentials: true
 
+      - name: 게시 여부 결정
+        id: gate
+        run: |
+          # 하루 34개 슬롯 중 목표 횟수만큼만 확률적으로 실행한다.
+          # 이렇게 하면 "매 30분마다 정확히" 라는 패턴이 사라지고
+          # 게시 간격이 30분~2시간 사이로 불규칙해진다.
+          TARGET=${TARGET_POSTS_PER_DAY:-24}
+          SLOTS=34
+
+          # 수동 실행(workflow_dispatch)은 건너뛰지 않는다
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "수동 실행 - 건너뛰기 없음"
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          KEEP=$(( TARGET * 100 / SLOTS ))
+          if [ -n "${RANDOM:-}" ]; then
+            ROLL=$(( RANDOM % 100 ))
+          else
+            ROLL=$(awk 'BEGIN{srand();print int(rand()*100)}')
+          fi
+
+          if [ "$ROLL" -lt "$KEEP" ]; then
+            echo "실행 (roll=${ROLL} < ${KEEP}, 목표 ${TARGET}회/일)"
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "이번 슬롯은 건너뜁니다 (roll=${ROLL} >= ${KEEP})"
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          TARGET_POSTS_PER_DAY: ${{ vars.TARGET_POSTS_PER_DAY || '24' }}
+
       - name: 파이썬 확인
         id: py
+        if: steps.gate.outputs.run == 'yes'
         run: |
           # 윈도우는 python, 리눅스/맥은 python3 인 경우가 많다
           if command -v python3 >/dev/null 2>&1; then
@@ -53,6 +87,7 @@ jobs:
           $PY --version
 
       - name: 패키지 설치
+        if: steps.gate.outputs.run == 'yes'
         run: |
           PY="${{ steps.py.outputs.cmd }}"
           $PY -m pip install --upgrade pip
@@ -62,16 +97,18 @@ jobs:
           $PY -m playwright install chromium || true
 
       - name: 이전 실행 잔재 정리
+        if: steps.gate.outputs.run == 'yes'
         run: |
           # .browser-profile 은 쿠키 유지를 위해 지우지 않는다
           rm -rf cards post_image.jpg debug_goldbox.png
         continue-on-error: true
 
       - name: 랜덤 대기
+        if: steps.gate.outputs.run == 'yes'
         run: |
-          # 매번 정확히 :05, :35 에 올라가면 기계적인 패턴이 드러난다.
-          # 0~200초 사이로 흔들어 게시 시각을 분산시킨다.
-          MAX=${DELAY_MAX_SECONDS:-200}
+          # 슬롯 안에서도 게시 시각을 넓게 흩뿌린다.
+          # 0~900초(최대 15분)면 :05 슬롯이 :05~:20 사이 어디든 된다.
+          MAX=${DELAY_MAX_SECONDS:-900}
           if [ -n "${RANDOM:-}" ]; then
             DELAY=$(( RANDOM % (MAX + 1) ))
           else
@@ -81,9 +118,10 @@ jobs:
           echo "${DELAY}초 대기 후 게시합니다. (최대 ${MAX}초)"
           sleep "$DELAY"
         env:
-          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '200' }}
+          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '900' }}
 
       - name: 자동 게시 실행
+        if: steps.gate.outputs.run == 'yes'
         env:
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
@@ -105,7 +143,7 @@ jobs:
         run: ${{ steps.py.outputs.cmd }} main.py
 
       - name: 카드 이미지 업로드 (디버그용)
-        if: always()
+        if: always() && steps.gate.outputs.run == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: card-images
@@ -117,7 +155,7 @@ jobs:
           retention-days: 3
 
       - name: 게시 기록 커밋
-        if: success() && inputs.dry_run != true
+        if: success() && steps.gate.outputs.run == 'yes' && inputs.dry_run != true
         run: |
           git config user.name "auto-post-bot"
           git config user.email "actions@github.com"
