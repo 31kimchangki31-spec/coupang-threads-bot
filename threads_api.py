@@ -4,7 +4,9 @@ Threads API 연동 모듈
 - 게시물 컨테이너 생성 -> 발행 2단계로 동작
 - 텍스트 전용 / 이미지 포함 둘 다 지원
 """
+import os
 import time
+
 import requests
 
 BASE_URL = "https://graph.threads.net/v1.0"
@@ -34,9 +36,13 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
     resp = requests.post(create_url, params=params)
     if not resp.ok:
         print(f"[Threads 컨테이너 생성 실패] status={resp.status_code} body={resp.text}")
-        # 이미지 때문에 실패한 경우, 텍스트 전용으로 한 번 더 시도한다.
-        # (Meta 크롤러가 이미지를 못 가져오는 상황에서 게시 자체를 포기하지 않기 위함)
-        if image_url:
+        # 이미지 게시가 실패했을 때 텍스트만으로 올릴지 여부.
+        #
+        # 기본값은 '올리지 않음'이다. 이미지 없이 올리면 Threads 가 링크 미리보기를
+        # 대신 붙여버려서 원하는 카드 이미지 게시물이 나오지 않는다.
+        # 그럴 바에는 건너뛰고 다음 슬롯에 제대로 올리는 편이 낫다.
+        allow_text_fallback = os.environ.get("ALLOW_TEXT_FALLBACK", "0") == "1"
+        if image_url and allow_text_fallback:
             print("[Threads] 이미지 없이 텍스트 전용으로 재시도합니다.")
             retry_params = {
                 "text": text,
@@ -48,6 +54,12 @@ def post_to_threads(user_id: str, access_token: str, text: str, image_url: str =
             resp = requests.post(create_url, params=retry_params)
             if not resp.ok:
                 print(f"[Threads 텍스트 재시도도 실패] body={resp.text}")
+        elif image_url:
+            print(
+                "[Threads] 이미지 게시에 실패했습니다. 텍스트만 올리면 링크 미리보기가\n"
+                "          붙어버리므로 게시하지 않고 종료합니다.\n"
+                "          (텍스트 전용 게시를 허용하려면 ALLOW_TEXT_FALLBACK=1)"
+            )
     resp.raise_for_status()
     creation_id = resp.json()["id"]
 
