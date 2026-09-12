@@ -19,6 +19,9 @@ permissions:
   contents: write
 
 concurrency:
+  # 앞 실행이 아직 돌고 있으면 이번 슬롯은 취소한다.
+  # false 로 두면 대기했다가 앞 실행 직후 바로 돌아 게시가 몰린다.
+  # 어차피 하루 34슬롯 중 24회만 쓰므로 한 슬롯을 버려도 손해가 없다.
   group: coupang-threads-post
   cancel-in-progress: false
 
@@ -107,8 +110,9 @@ jobs:
         if: steps.gate.outputs.run == 'yes'
         run: |
           # 슬롯 안에서도 게시 시각을 넓게 흩뿌린다.
-          # 0~900초(최대 15분)면 :05 슬롯이 :05~:20 사이 어디든 된다.
-          MAX=${DELAY_MAX_SECONDS:-900}
+          # 0~600초(최대 10분). 15분까지 두면 수집 시간과 합쳐져
+          # 다음 30분 슬롯과 겹치는 일이 잦아진다.
+          MAX=${DELAY_MAX_SECONDS:-600}
           if [ -n "${RANDOM:-}" ]; then
             DELAY=$(( RANDOM % (MAX + 1) ))
           else
@@ -118,7 +122,7 @@ jobs:
           echo "${DELAY}초 대기 후 게시합니다. (최대 ${MAX}초)"
           sleep "$DELAY"
         env:
-          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '900' }}
+          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '600' }}
 
       - name: 자동 게시 실행
         if: steps.gate.outputs.run == 'yes'
@@ -135,6 +139,8 @@ jobs:
           # Akamai 우회 관련. 기본값은 실제 크롬 + headed + 프로필 유지.
           # 게시 기록 초기화 시각(KST). 게시 스케줄이 07:05~05:35 이라 06시가 경계.
           RESET_HOUR: ${{ vars.RESET_HOUR || '6' }}
+          # 직전 게시로부터 최소 간격(분). 대기열 밀림으로 게시가 몰리는 것을 막는다.
+          MIN_POST_INTERVAL_MINUTES: ${{ vars.MIN_POST_INTERVAL_MINUTES || '25' }}
           KEEP_CARD_IMAGES: ${{ vars.KEEP_CARD_IMAGES || '30' }}
           BROWSER_CHANNEL: ${{ vars.BROWSER_CHANNEL || 'chrome' }}
           HEADLESS: ${{ vars.HEADLESS || '0' }}
