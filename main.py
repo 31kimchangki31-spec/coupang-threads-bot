@@ -33,6 +33,18 @@ KST = timezone(timedelta(hours=9))
 # 게시 스케줄이 07:05~05:35 이므로, 자정이 아니라 06시를 하루 경계로 삼는다.
 RESET_HOUR = int(os.environ.get("RESET_HOUR", "6"))
 
+# 직전 게시로부터 최소 이 시간은 지나야 다시 게시한다.
+# 대기열에서 밀린 실행이 앞 실행 직후에 바로 돌면 게시가 몰리는데, 이를 막는다.
+MIN_INTERVAL_MIN = int(os.environ.get("MIN_POST_INTERVAL_MINUTES", "25"))
+
+# 저장소 밖 로컬 캐시.
+# posted.json 은 push 가 실패하면 원격에 남지 않고, 다음 실행의 checkout 이
+# 작업 디렉터리를 되돌려버린다. 그러면 같은 상품을 다시 게시하게 된다.
+# 그래서 러너 홈에도 같은 기록을 남겨 두 곳을 합쳐서 읽는다.
+LOCAL_STATE = os.path.join(
+    os.path.expanduser("~"), ".coupang-threads-bot", "posted.json"
+)
+
 
 def cycle_label() -> str:
     """
@@ -45,44 +57,83 @@ def cycle_label() -> str:
     return now.strftime("%Y-%m-%d")
 
 
-def load_posted() -> tuple:
-    """
-    현재 주기의 게시 기록을 (상품ID 집합, 상품명키 집합) 으로 돌려준다.
-    주기가 바뀌었으면 빈 집합을 반환해 자동으로 초기화된다.
-    """
-    empty = (set(), set())
-    if not os.path.exists(POSTED_FILE):
-        return empty
+def _read_state(path: str) -> dict:
+    """기록 파일 하나를 읽는다. 현재 주기가 아니면 빈 값."""
+    if not os.path.exists(path):
+        return {}
     try:
-        with open(POSTED_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        return empty
+        return {}
     if not isinstance(data, dict):
-        return empty
-
+        return {}
     # 이전 버전은 "date"/"ids" 형식이었으므로 둘 다 인정한다
     label = data.get("cycle") or data.get("date")
     if label != cycle_label():
-        print(f"[기록] 주기 변경({label} -> {cycle_label()}), 게시 기록 초기화")
-        return empty
+        return {}
+    return data
 
-    ids = {str(i) for i in data.get("ids", [])}
-    names = {str(n) for n in data.get("names", [])}
-    return ids, names
+
+def load_posted() -> tuple:
+    """
+    현재 주기의 게시 기록을 (상품ID 집합, 상품명키 집합, 마지막 게시시각) 으로 돌려준다.
+    저장소 파일과 로컬 캐시를 합쳐서 읽으므로, push 가 실패했던 경우에도
+    같은 상품을 다시 게시하지 않는다.
+    """
+    repo_state = _read_state(POSTED_FILE)
+    local_state = _read_state(LOCAL_STATE)
+
+    ids, names, last_at = set(), set(), None
+    for state, origin in ((repo_state, "저장소"), (local_state, "로컬")):
+        if not state:
+            continue
+        ids |= {str(i) for i in state.get("ids", [])}
+        names |= {str(n) for n in state.get("names", [])}
+        stamp = state.get("last_post_at")
+        if stamp and (last_at is None or stamp > last_at):
+            last_at = stamp
+
+    if repo_state and local_state:
+        only_local = len(ids) - len(repo_state.get("ids", []))
+        if only_local > 0:
+            print(f"[기록] 로컬 캐시에만 있는 게시 기록 {only_local}건 반영")
+    if not repo_state and not local_state:
+        print(f"[기록] 주기 {cycle_label()} 신규 시작")
+
+    return ids, names, last_at
 
 
 def save_posted(posted_ids: set, posted_names: set) -> None:
-    with open(POSTED_FILE, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "cycle": cycle_label(),
-                "reset_hour": RESET_HOUR,
-                "ids": sorted(posted_ids),
-                "names": sorted(posted_names),
-            },
-            f, ensure_ascii=False, indent=2,
-        )
+    payload = {
+        "cycle": cycle_label(),
+        "reset_hour": RESET_HOUR,
+        "last_post_at": datetime.now(KST).isoformat(timespec="seconds"),
+        "ids": sorted(posted_ids),
+        "names": sorted(posted_names),
+    }
+    for path in (POSTED_FILE, LOCAL_STATE):
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            print(f"[기록] {path} 저장 실패: {exc}")
+
+
+def minutes_since(stamp: str):
+    """마지막 게시로부터 지난 분. 기록이 없으면 None."""
+    if not stamp:
+        return None
+    try:
+        last = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=KST)
+    return (datetime.now(KST) - last).total_seconds() / 60
 
 
 def require_env(name: str) -> str:
@@ -121,6 +172,22 @@ def main() -> None:
         threads_user_id = require_env("THREADS_USER_ID")
         threads_token = require_env("THREADS_ACCESS_TOKEN")
 
+    # 0. 게시 기록을 먼저 읽고 최소 간격을 확인한다.
+    #    브라우저를 띄우기 전에 걸러야 대기열 밀림이 낭비로 이어지지 않는다.
+    posted_ids, posted_names, last_at = load_posted()
+    print(f"[기록] 주기 {cycle_label()} / 게시됨 {len(posted_ids)}건")
+
+    elapsed = minutes_since(last_at)
+    if elapsed is not None:
+        print(f"[기록] 직전 게시로부터 {elapsed:.1f}분 경과")
+        if elapsed < MIN_INTERVAL_MIN and not dry_run:
+            print(
+                f"\n직전 게시가 {elapsed:.1f}분 전이라 게시하지 않고 종료합니다.\n"
+                f"  최소 간격 {MIN_INTERVAL_MIN}분 (MIN_POST_INTERVAL_MINUTES 로 조정)\n"
+                "  대기열에 밀린 실행으로 보입니다. 다음 슬롯에서 정상 게시됩니다."
+            )
+            sys.exit(0)
+
     # 1. 골드박스 API 목록
     try:
         products = get_goldbox_products(access_key, secret_key, limit=100)
@@ -142,8 +209,6 @@ def main() -> None:
         print(f"[페이지] 수집 건너뜀: {exc}")
 
     # 3. 선정
-    posted_ids, posted_names = load_posted()
-    print(f"[기록] 주기 {cycle_label()} / 게시됨 {len(posted_ids)}건")
     target = select_product(products, posted_ids, page_data, posted_names)
     if target is None:
         print("게시 가능한 상품이 없습니다. 다음 실행에서 재시도합니다.")
