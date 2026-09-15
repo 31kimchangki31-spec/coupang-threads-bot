@@ -19,9 +19,11 @@ permissions:
   contents: write
 
 concurrency:
-  # 앞 실행이 아직 돌고 있으면 이번 슬롯은 취소한다.
-  # false 로 두면 대기했다가 앞 실행 직후 바로 돌아 게시가 몰린다.
-  # 어차피 하루 34슬롯 중 24회만 쓰므로 한 슬롯을 버려도 손해가 없다.
+  # 같은 그룹은 한 번에 하나만 실행된다.
+  # cancel-in-progress: false 이므로 진행 중인 실행을 죽이지 않고 대기시킨다.
+  # (게시 도중에 끊기면 posted.json 이 저장되지 않아 중복 게시 위험이 있다)
+  # 대기 중 바로 이어 실행되어 게시가 몰리는 문제는
+  # main.py 의 MIN_POST_INTERVAL_MINUTES 가드가 막는다.
   group: coupang-threads-post
   cancel-in-progress: false
 
@@ -30,6 +32,11 @@ jobs:
     # 쿠팡이 데이터센터 IP를 Akamai 단계에서 차단하므로 가정용 IP가 필요하다.
     # 공용 러너로 돌리려면 ubuntu-latest 로 바꾸고 BROWSER_PROXY 를 설정할 것.
     runs-on: self-hosted
+
+    # 노트북이 절전에 들어가면 실행이 멈춘 채 러너를 계속 붙잡는다.
+    # (실제로 4시간 14분 걸린 실행이 있었다)
+    # 그동안 오는 슬롯은 대기열에서 취소되므로, 아예 끊어내는 편이 낫다.
+    timeout-minutes: 25
 
     defaults:
       run:
@@ -110,9 +117,9 @@ jobs:
         if: steps.gate.outputs.run == 'yes'
         run: |
           # 슬롯 안에서도 게시 시각을 넓게 흩뿌린다.
-          # 0~600초(최대 10분). 15분까지 두면 수집 시간과 합쳐져
-          # 다음 30분 슬롯과 겹치는 일이 잦아진다.
-          MAX=${DELAY_MAX_SECONDS:-600}
+          # 0~420초(최대 7분). 여기에 수집 3~8분이 더해져 최대 15분 정도가 된다.
+          # job 제한 25분 안에 여유 있게 들어온다.
+          MAX=${DELAY_MAX_SECONDS:-420}
           if [ -n "${RANDOM:-}" ]; then
             DELAY=$(( RANDOM % (MAX + 1) ))
           else
@@ -122,10 +129,11 @@ jobs:
           echo "${DELAY}초 대기 후 게시합니다. (최대 ${MAX}초)"
           sleep "$DELAY"
         env:
-          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '600' }}
+          DELAY_MAX_SECONDS: ${{ vars.DELAY_MAX_SECONDS || '420' }}
 
       - name: 자동 게시 실행
         if: steps.gate.outputs.run == 'yes'
+        timeout-minutes: 18
         env:
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
@@ -135,15 +143,16 @@ jobs:
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           POST_TOPIC_TAG: ${{ vars.POST_TOPIC_TAG || '광고' }}
-          BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
-          # Akamai 우회 관련. 기본값은 실제 크롬 + headed + 프로필 유지.
-          # 게시 기록 초기화 시각(KST). 게시 스케줄이 07:05~05:35 이라 06시가 경계.
+          # 게시 기록 초기화 시각(KST). 심야에 게시하지 않으므로 06시를 경계로 둔다.
           RESET_HOUR: ${{ vars.RESET_HOUR || '6' }}
           # 직전 게시로부터 최소 간격(분). 대기열 밀림으로 게시가 몰리는 것을 막는다.
           MIN_POST_INTERVAL_MINUTES: ${{ vars.MIN_POST_INTERVAL_MINUTES || '25' }}
+          # 저장소에 남겨둘 카드 이미지 개수
           KEEP_CARD_IMAGES: ${{ vars.KEEP_CARD_IMAGES || '30' }}
+          # Akamai 차단 우회. 실제 크롬 + headed + 프로필 유지가 기본값이다.
           BROWSER_CHANNEL: ${{ vars.BROWSER_CHANNEL || 'chrome' }}
           HEADLESS: ${{ vars.HEADLESS || '0' }}
+          BROWSER_PROXY: ${{ secrets.BROWSER_PROXY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           PYTHONIOENCODING: utf-8
         run: ${{ steps.py.outputs.cmd }} main.py
