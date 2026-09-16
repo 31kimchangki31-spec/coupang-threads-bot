@@ -33,9 +33,10 @@ jobs:
     # 공용 러너로 돌리려면 ubuntu-latest 로 바꾸고 BROWSER_PROXY 를 설정할 것.
     runs-on: self-hosted
 
-    # 노트북이 절전에 들어가면 실행이 멈춘 채 러너를 계속 붙잡는다.
-    # (실제로 4시간 14분 걸린 실행이 있었다)
-    # 그동안 오는 슬롯은 대기열에서 취소되므로, 아예 끊어내는 편이 낫다.
+    # 실행 자체가 멈춘 경우를 대비한 상한.
+    # (Actions 목록에 보이는 "10시간" 같은 숫자는 실행 시간이 아니라
+    #  러너가 꺼져 있던 대기 시간이라 이 설정으로는 잡히지 않는다.
+    #  그쪽은 위 '게시 여부 결정' 스텝의 예약 신선도 확인이 처리한다.)
     timeout-minutes: 25
 
     defaults:
@@ -53,7 +54,33 @@ jobs:
       - name: 게시 여부 결정
         id: gate
         run: |
-          # 하루 34개 슬롯 중 목표 횟수만큼만 확률적으로 실행한다.
+          # --- 1단계: 예약이 너무 오래됐으면 버린다 ---
+          #
+          # 러너(노트북)가 꺼져 있으면 슬롯이 큐에 그대로 쌓인다.
+          # 노트북을 켜는 순간 10시간 전 예약까지 한꺼번에 실행되는데,
+          # 그건 "오전 9시 예약을 밤 9시에 게시"하는 것이라 의미가 없다.
+          # 그래서 예약 시각으로부터 일정 시간이 지난 건 실행하지 않는다.
+          MAX_AGE=${MAX_SLOT_AGE_MINUTES:-20}
+
+          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+
+          RUN_JSON=$(curl -sS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || echo "")
+          CREATED=$(printf '%s' "$RUN_JSON" | "$PY" -c "import sys,json; print(json.load(sys.stdin).get('created_at',''))" 2>/dev/null || echo "")
+
+          if [ -n "$CREATED" ]; then
+            AGE=$("$PY" -c "import sys,datetime as d; c=d.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')); print(int((d.datetime.now(d.timezone.utc)-c).total_seconds()//60))" "$CREATED" 2>/dev/null || echo "-1")
+            echo "예약 시각: ${CREATED} (${AGE}분 경과)"
+            if [ "$AGE" -ge 0 ] && [ "$AGE" -gt "$MAX_AGE" ]; then
+              echo "예약이 ${AGE}분 지나 실행하지 않습니다 (허용 ${MAX_AGE}분)."
+              echo "러너가 꺼져 있던 동안 쌓인 슬롯으로 보입니다."
+              echo "run=no" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo "예약 시각을 확인하지 못했습니다. 계속 진행합니다."
+          fi
+
+          # --- 2단계: 하루 34개 슬롯 중 목표 횟수만큼만 확률적으로 실행 ---
           # 이렇게 하면 "매 30분마다 정확히" 라는 패턴이 사라지고
           # 게시 간격이 30분~2시간 사이로 불규칙해진다.
           TARGET=${TARGET_POSTS_PER_DAY:-24}
@@ -82,6 +109,9 @@ jobs:
           fi
         env:
           TARGET_POSTS_PER_DAY: ${{ vars.TARGET_POSTS_PER_DAY || '24' }}
+          # 예약 시각으로부터 이 시간이 지나면 실행하지 않는다
+          MAX_SLOT_AGE_MINUTES: ${{ vars.MAX_SLOT_AGE_MINUTES || '20' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 파이썬 확인
         id: py
